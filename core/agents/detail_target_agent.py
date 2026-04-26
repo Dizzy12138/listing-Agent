@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from PIL import Image
+
 
 DETAIL_TARGET_RULES = [
     {
@@ -46,3 +48,22 @@ class DetailTargetAgent:
             "annotation_title": "Product Detail",
             "matched_keywords": [],
         }
+
+    def crop_by_strategy(self, image: Image.Image, crop_strategy: str) -> Image.Image:
+        rgba = image.convert("RGBA")
+        w, h = rgba.size
+        boxes = {
+            "vertical_middle_left": (0.02, 0.12, 0.68, 0.92),
+            "upper_platforms": (0.04, 0.02, 0.96, 0.68),
+            "bottom_base": (0.04, 0.50, 0.96, 0.98),
+            "full_vertical_path": (0.12, 0.02, 0.88, 0.98),
+            "center_structure": (0.14, 0.10, 0.86, 0.90),
+        }
+        x1, y1, x2, y2 = boxes.get(crop_strategy, boxes["center_structure"])
+        box = (int(w * x1), int(h * y1), int(w * x2), int(h * y2))
+        crop = rgba.crop(box)
+
+        canvas = Image.new("RGBA", rgba.size, (255, 255, 255, 0))
+        crop.thumbnail((int(w * 0.94), int(h * 0.94)), Image.Resampling.LANCZOS)
+        canvas.paste(crop, ((w - crop.width) // 2, (h - crop.height) // 2), crop)
+        return canvas

@@ -10,21 +10,32 @@ from core.workflows.registry import register_workflow
 @register_workflow("detail")
 class DetailWorkflow(BaseWorkflow):
     def run(self, context: WorkflowContext):
-        target = DetailTargetAgent().resolve(context.job.description)
+        target_agent = DetailTargetAgent()
+        target = target_agent.resolve(context.job.description)
         view_asset = context.view_agent.get_or_generate_view(
             sku=context.sku,
             base_subject=context.base_assets["white_bg"],
             image_type=context.job.image_type,
             requested_view=context.job.view_type,
         )
+        view_path = context.view_agent.save_view_asset(context.sku.product_id, context.job.image_index, view_asset)
+        detail_source = target_agent.crop_by_strategy(view_asset.image, target["crop_strategy"])
         with context.trace.timed("workflow.detail"):
             details = generate_detail_crops(
-                view_asset.image,
+                detail_source,
                 [context.job.description],
             )
             artifacts = []
             if details:
                 artifact = self.save_image(details[0]["crop"], context, context.job.image_type, "detail")
+                artifact.metadata.update({
+                    "view_generation_mode": view_asset.mode,
+                    "view_issues": view_asset.issues or [],
+                    "view_asset_path": str(view_path),
+                    "target_region": target["target_region"],
+                    "crop_strategy": target["crop_strategy"],
+                    "annotation_title": target["annotation_title"],
+                })
                 artifacts.append(artifact)
                 context.trace.add(
                     step="workflow.detail.output",

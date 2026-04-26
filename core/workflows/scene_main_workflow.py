@@ -15,6 +15,7 @@ class SceneMainWorkflow(BaseWorkflow):
             image_type=context.job.image_type,
             requested_view=context.job.view_type,
         )
+        view_path = context.view_agent.save_view_asset(context.sku.product_id, context.job.image_index, view_asset)
         scene_description = self._scene_description(context)
         with context.trace.timed("workflow.scene_main"):
             images = generate_scene_with_product(
@@ -27,6 +28,12 @@ class SceneMainWorkflow(BaseWorkflow):
             artifacts = []
             if images:
                 artifact = self.save_image(images[0], context, context.job.image_type, "scene")
+                artifact.metadata.update({
+                    "view_generation_mode": view_asset.mode,
+                    "view_issues": view_asset.issues or [],
+                    "view_asset_path": str(view_path),
+                    "view_locked": bool(context.job.params.get("view_locked")),
+                })
                 artifacts.append(artifact)
                 context.trace.add(
                     step="view_agent.select",

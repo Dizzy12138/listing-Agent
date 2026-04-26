@@ -10,6 +10,13 @@ from core.schemas.job import ImageJob
 from core.schemas.view import CAT_TREE_VIEW_PRESETS, ViewSpec
 
 
+LOCKED_VIEW_TYPES_BY_IMAGE_TYPE = {
+    "scene_main": "low_angle_hero",
+    "main_scene": "low_angle_hero",
+    "size_compare": "front_open",
+}
+
+
 @dataclass
 class ViewAsset:
     view_type: str
@@ -39,12 +46,22 @@ class ViewAgent:
         defaults = list(sku.view_strategy.default_views)
         allocated: list[ImageJob] = []
         for job in jobs:
-            view_type = job.view_type or self.resolve_view(sku, job.image_type).view_type
-            if sku.view_strategy.avoid_repeated_view and used.get(view_type, 0) >= sku.view_strategy.max_same_view_count:
+            locked_view = LOCKED_VIEW_TYPES_BY_IMAGE_TYPE.get(job.image_type)
+            view_type = locked_view or job.view_type or self.resolve_view(sku, job.image_type).view_type
+            is_locked = locked_view is not None
+            if (
+                not is_locked
+                and sku.view_strategy.avoid_repeated_view
+                and used.get(view_type, 0) >= sku.view_strategy.max_same_view_count
+            ):
                 replacement = next((view for view in defaults if used.get(view, 0) < sku.view_strategy.max_same_view_count), view_type)
                 view_type = replacement
             used[view_type] = used.get(view_type, 0) + 1
-            allocated.append(job.model_copy(update={"view_type": view_type}))
+            params = dict(job.params)
+            if is_locked:
+                params["view_locked"] = True
+                params["locked_view_type"] = locked_view
+            allocated.append(job.model_copy(update={"view_type": view_type, "params": params}))
         return allocated
 
     def resolve_view(self, sku: SKU, image_type: str, requested_view: str | None = None) -> ViewSpec:
@@ -80,6 +97,14 @@ class ViewAgent:
 
     def _preset(self, view_type: str) -> ViewSpec:
         return CAT_TREE_VIEW_PRESETS.get(view_type, CAT_TREE_VIEW_PRESETS["front_open"])
+
+    def save_view_asset(self, sku_id: str, image_index: int, asset: ViewAsset) -> Path:
+        views_dir = self.output_dir / "views"
+        views_dir.mkdir(parents=True, exist_ok=True)
+        path = views_dir / f"{sku_id}_{image_index:02d}_{asset.view_type}.png"
+        asset.image.save(path, "PNG")
+        asset.path = path
+        return path
 
     def _generate_controlled_view(self, base_subject: Image.Image, spec: ViewSpec) -> tuple[Image.Image, list[str]]:
         rgba = base_subject.convert("RGBA")

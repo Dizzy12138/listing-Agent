@@ -96,9 +96,16 @@ SKU Schema
 - `reuse`：复用标准主体资产。
 - `mirror`：镜像主体资产，作为保守兜底。
 - `crop`：从标准主体资产生成细节视角。
-- `model_synthesis`：真实多视角重建入口，当前不会自动启用；Trace 会记录 `model_synthesis_not_implemented`。
+- `model_synthesis`：可被分配为视角意图，但当前不会执行真实重建；系统会复用标准主体资产，并在 Trace / Artifact / Quality 中记录 `model_synthesis_not_implemented`。
 
 这意味着当前系统已经能追踪每张图的视角意图、执行模式和重复情况，但 `low_angle_hero` / `left_45` 的真实视角重建仍属于下一阶段能力。
+
+关键商业图会锁定核心视角，避免全局去重破坏图片目标：
+
+- `scene_main`：锁定 `low_angle_hero`，优先服务“显高、显大”的商业目标。
+- `size_compare`：锁定 `front_open`，优先保证尺寸对比清晰。
+
+每次执行会额外保存视角资产到 `output/{run}/views/`，用于判断问题发生在视角资产阶段还是场景合成阶段。
 
 ### 质量与 Trace
 
@@ -107,6 +114,7 @@ SKU Schema
 - 是否有输出产物
 - 图片尺寸是否过小
 - 场景图是否出现透明棋盘格/白块伪影
+- 请求了尚未实现的模型重建视角
 - `view_distribution` 是否存在重复视角
 
 所有结果会写入输出目录的 `trace.json`。
