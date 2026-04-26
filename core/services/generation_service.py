@@ -10,6 +10,7 @@ from typing import Callable
 from PIL import Image
 
 from config import MODELS, OUTPUT_DIR, PRODUCTS_DIR
+from core.agents.asset_quality_gate import AssetQualityGate
 from core.agents.quality_agent import QualityAgent
 from core.agents.view_agent import ViewAgent
 from core.schemas.job import Artifact, ImageJob, WorkflowResult
@@ -25,6 +26,7 @@ from pipeline.step2_scene import generate_scene_descriptions
 from core.workflows import detail_workflow  # noqa: F401
 from core.workflows import multilingual_text_workflow  # noqa: F401
 from core.workflows import scene_main_workflow  # noqa: F401
+from core.workflows import selling_point_annotation_workflow  # noqa: F401
 from core.workflows import size_compare_workflow  # noqa: F401
 from core.workflows import white_main_workflow  # noqa: F401
 
@@ -42,7 +44,7 @@ class GenerationService:
         jobs: list[ImageJob] = []
         scene_idx = 0
         for item in sku.image_plan:
-            workflow_key = resolve_workflow(item.type)
+            workflow_key = resolve_workflow(item.type, item.description)
             params = {
                 "visual_goal": item.visual_goal,
                 "required_elements": item.required_elements,
@@ -87,12 +89,15 @@ class GenerationService:
         extracted = remove_background(product_image, model=model)
         extracted["transparent"].save(output_dir / "01_transparent.png", "PNG")
         extracted["white_bg"].save(output_dir / "01_white_bg.png", "PNG")
+        asset_quality = AssetQualityGate().evaluate(extracted["transparent"], extracted["white_bg"])
+        extracted["asset_quality"] = asset_quality
         trace.add(
             step="asset_agent.extract",
-            status="success",
+            status="success" if asset_quality["status"] == "pass" else "fail",
             input={"sku_id": sku.product_id, "image_path": str(image_path)},
             model=model,
             output_artifact=str(output_dir / "01_transparent.png"),
+            issues=asset_quality["issues"],
         )
 
         scenes = self._generate_scenes(sku, product_image, model)
@@ -160,7 +165,7 @@ class GenerationService:
         }
 
     def _generate_scenes(self, sku: SKU, product_image: Image.Image, model: str) -> list[dict]:
-        scene_count = sum(1 for item in sku.image_plan if resolve_workflow(item.type) == "scene_main")
+        scene_count = sum(1 for item in sku.image_plan if resolve_workflow(item.type, item.description) == "scene_main")
         scene_count = max(1, min(5, scene_count))
         return generate_scene_descriptions(
             product_info=sku.model_dump(),

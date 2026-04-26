@@ -8,6 +8,7 @@ from core.workflows.registry import register_workflow
 
 
 @register_workflow("detail")
+@register_workflow("detail_material")
 class DetailWorkflow(BaseWorkflow):
     def run(self, context: WorkflowContext):
         target_agent = DetailTargetAgent()
@@ -19,7 +20,11 @@ class DetailWorkflow(BaseWorkflow):
             requested_view=context.job.view_type,
         )
         view_path = context.view_agent.save_view_asset(context.sku.product_id, context.job.image_index, view_asset)
-        detail_source = target_agent.crop_by_strategy(view_asset.image, target["crop_strategy"])
+        detail_source = target_agent.crop_by_strategy(
+            view_asset.image,
+            target["crop_strategy"],
+            variant=context.job.image_index,
+        )
         with context.trace.timed("workflow.detail"):
             details = generate_detail_crops(
                 detail_source,
@@ -35,6 +40,7 @@ class DetailWorkflow(BaseWorkflow):
                     "target_region": target["target_region"],
                     "crop_strategy": target["crop_strategy"],
                     "annotation_title": target["annotation_title"],
+                    "crop_variant": context.job.image_index % 3,
                 })
                 artifacts.append(artifact)
                 context.trace.add(

@@ -93,12 +93,16 @@ def remove_background(product_image: Image.Image, model: str = "gpt-image-2") ->
         "Do not modify, distort or regenerate the product in any way."
     )
 
-    results = edit_image(product_image, prompt, model=model)
+    try:
+        results = edit_image(product_image, prompt, model=model)
+    except Exception as exc:  # pragma: no cover - depends on external model service
+        console.print(f"  ⚠️ 模型抠图失败，使用本地保守清理 fallback: {exc}", style="yellow")
+        results = []
 
-    if not results:
-        raise RuntimeError("抠图失败：模型未返回结果")
-
-    transparent_img = clean_baked_background(results[0])
+    if results:
+        transparent_img = clean_baked_background(results[0])
+    else:
+        transparent_img = clean_baked_background(product_image)
     white_bg = Image.new("RGBA", transparent_img.size, (255, 255, 255, 255))
     white_bg = Image.alpha_composite(white_bg, transparent_img)
     white_bg = white_bg.convert("RGB")

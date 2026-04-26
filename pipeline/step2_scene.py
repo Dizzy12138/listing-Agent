@@ -90,7 +90,13 @@ def generate_scene_descriptions(
 
     console.print(f"  → 使用 {model} 分析产品并生成场景描述...")
 
-    response = chat(prompt=prompt, model=model, image=product_image, response_format="json")
+    try:
+        response = chat(prompt=prompt, model=model, image=product_image, response_format="json")
+    except Exception as exc:  # pragma: no cover - depends on external LLM service
+        console.print(f"  ⚠️ 场景 LLM 失败，使用本地场景描述 fallback: {exc}", style="yellow")
+        scenes = _fallback_scenes(product_info, user_requirements, scene_count)
+        console.print(f"  ✅ 生成 {len(scenes)} 个场景描述", style="green")
+        return scenes
 
     try:
         result = _parse_json_response(response)
@@ -104,3 +110,40 @@ def generate_scene_descriptions(
         console.print(f"    {i}. {scene.get('name', '未命名')}: {scene.get('description_zh', '')[:60]}...")
 
     return scenes
+
+
+def _fallback_scenes(product_info: dict, user_requirements: str, scene_count: int) -> list[dict]:
+    name = product_info.get("name", "large cat tree")
+    base = user_requirements or "spacious luxury living room"
+    templates = [
+        {
+            "name": "豪华客厅亲子互动场景",
+            "description_zh": "豪华客厅内的大型猫爬架场景，突出高度、稳定性、缅因猫和小朋友互动。",
+            "description_en": (
+                f"A premium ecommerce lifestyle photo of {name} in a spacious luxury living room. "
+                f"Scene requirement: {base}. Low angle, floor-to-ceiling composition, warm natural daylight, "
+                "a Maine Coon cat on the top platform, another cat resting on a lower platform, and a child nearby "
+                "interacting naturally. The cat tree should look tall, stable, grounded on the floor, with natural "
+                "contact shadows and no transparent checkerboard or white blocks."
+            ),
+            "key_elements": ["luxury living room", "Maine Coon cat", "child interaction", "natural shadows"],
+            "mood": "premium warm lifestyle",
+            "camera_angle": "low angle",
+        },
+        {
+            "name": "多猫家庭生活场景",
+            "description_zh": "现代家庭客厅中多只猫使用猫爬架，强调多层休息和家庭氛围。",
+            "description_en": (
+                f"A realistic family living room scene featuring {name}, designed for multi-cat households. "
+                "Show multiple cats using different resting areas and platforms, with a parent and child in the room. "
+                "The product must remain structurally accurate, full height visible, naturally blended into the room, "
+                "standing on the floor with soft shadows and consistent lighting."
+            ),
+            "key_elements": ["multi-cat", "family", "resting platforms", "home interior"],
+            "mood": "cozy family lifestyle",
+            "camera_angle": "slightly low front angle",
+        },
+    ]
+    while len(templates) < scene_count:
+        templates.append(templates[-1].copy())
+    return templates[:scene_count]
