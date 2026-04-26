@@ -1,0 +1,18 @@
+category: cat_tree
+default_views:
+  - front_open
+  - left_45
+  - right_45
+  - low_angle_hero
+  - detail_closeup
+image_type_view_defaults:
+  white_bg: front_open
+  scene_main: low_angle_hero
+  scene_lifestyle: right_45
+  selling_point: detail_closeup
+  detail: detail_closeup
+  size_compare: front_open
+asset_rules:
+  - standardized subject asset is required before generation
+  - raw photo is structure reference, not final commercial output
+  - repeated view should be avoided across image_plan

@@ -1,0 +1,32 @@
+models:
+  gpt_image_2:
+    provider: openai
+    type: image_generation_and_edit
+    endpoint: ${OPENAI_BASE_URL}
+    api_key_env: OPENAI_API_KEY
+    timeout: 120
+    max_retries: 2
+    enabled: true
+
+  gemini_image:
+    provider: google
+    type: image_generation
+    api_key_env: GOOGLE_API_KEY
+    timeout: 120
+    max_retries: 2
+    enabled: true
+
+routing:
+  background_removal:
+    primary: gpt_image_2
+    fallback: gemini_image
+  scene_generation:
+    primary: gpt_image_2
+    fallback: gemini_image
+  subject_composition:
+    primary: gpt_image_2
+    fallback: deterministic_pil
+  prompt_generation:
+    primary: gpt_5_2
+  quality_review:
+    primary: gpt_5_2

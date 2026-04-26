@@ -35,16 +35,21 @@
         "cat_breeds": ["缅因猫(Maine Coon)", "波斯猫(Persian)", "英短(British Shorthair)", "布偶猫(Ragdoll)"]
     },
     "image_plan": [
-        {"index": 1, "type": "white_bg", "description": "白底首图，产品占比85%+，开放式视角显大"},
-        {"index": 2, "type": "scene_main", "description": "场景首图，豪华客厅，缅因猫+多猫，压迫感显大"},
-        {"index": 3, "type": "selling_point", "description": "卖点图-6个休息区域，多猫多区域标注"},
-        {"index": 4, "type": "selling_point", "description": "卖点图-抓挠系统，剑麻柱+猫抓板"},
-        {"index": 5, "type": "selling_point", "description": "卖点图-双底板稳定性"},
-        {"index": 6, "type": "detail", "description": "细节图-材质工艺（绒布/剑麻/板材）"},
-        {"index": 7, "type": "scene_lifestyle", "description": "场景图-亲子互动，小朋友和猫咪"},
-        {"index": 8, "type": "selling_point", "description": "动线展示图-攀爬路径标注"},
-        {"index": 9, "type": "size_compare", "description": "尺寸对比图-205cm标注，人猫比例"}
+        {"index": 1, "type": "white_bg", "view_type": "front_open", "description": "白底首图，产品占比85%+，开放式视角显大"},
+        {"index": 2, "type": "scene_main", "view_type": "low_angle_hero", "description": "场景首图，豪华客厅，缅因猫+多猫，压迫感显大"},
+        {"index": 3, "type": "selling_point", "view_type": "left_45", "description": "卖点图-6个休息区域，多猫多区域标注"},
+        {"index": 4, "type": "selling_point", "view_type": "detail_closeup", "description": "卖点图-抓挠系统，剑麻柱+猫抓板"},
+        {"index": 5, "type": "selling_point", "view_type": "low_angle_hero", "description": "卖点图-双底板稳定性"},
+        {"index": 6, "type": "detail", "view_type": "detail_closeup", "description": "细节图-材质工艺（绒布/剑麻/板材）"},
+        {"index": 7, "type": "scene_lifestyle", "view_type": "right_45", "description": "场景图-亲子互动，小朋友和猫咪"},
+        {"index": 8, "type": "selling_point", "view_type": "left_45", "description": "动线展示图-攀爬路径标注"},
+        {"index": 9, "type": "size_compare", "view_type": "front_open", "description": "尺寸对比图-205cm标注，人猫比例"}
     ],
+    "view_strategy": {
+        "default_views": ["front_open", "left_45", "right_45", "low_angle_hero", "detail_closeup"],
+        "avoid_repeated_view": true,
+        "max_same_view_count": 1
+    },
     "competitors": [
         "https://www.amazon.com/Globlazer-F70-Pro-Scratching-Hammock/dp/B0DGKR5MMP",
         "https://www.amazon.com/Globlazer-F80-Multiple-Scratching-Hammock/dp/B0CV7DHG98",

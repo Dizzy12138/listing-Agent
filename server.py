@@ -249,131 +249,57 @@ def _update_task(task_id: str, **kwargs):
 
 
 def _run_task_real(task_id: str):
-    """真实 Pipeline 执行（后台线程）"""
+    """配置驱动的 Agent/Workflow 执行（后台线程）"""
     import traceback
     task = tasks[task_id]
     product_id = task["product_id"]
     model = task.get("model", "gpt-image-2")
-    scene_count = task.get("scene_count", 3)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = OUTPUT_DIR / f"{product_id}_{timestamp}"
-    out_dir.mkdir(parents=True, exist_ok=True)
-
     img_path = Path(task["image_path"])
-    product_image = None
-    generated_images = []
-
-    # 加载产品配置
-    prod_path = PRODUCTS_DIR / f"{product_id.lower()}.json"
-    product_info = {}
-    if prod_path.exists():
-        with open(prod_path, "r", encoding="utf-8") as f:
-            product_info = json.load(f)
+    generated_images: list[dict] = []
 
     try:
-        from PIL import Image
+        from core.services.generation_service import GenerationService
 
-        # 保存原图
-        if img_path.exists():
-            shutil.copy(img_path, out_dir / "original.png")
-            # 强制加载到内存避免文件句柄问题
-            with Image.open(img_path) as _img:
-                product_image = _img.copy().convert("RGB")
-            generated_images.append({"name": "原图", "filename": "original.png", "type": "original"})
+        def progress(message: str, value: int):
+            _update_task(task_id, status="running", current_step=message, progress=value)
 
-        # === Step 1: 白图修复 ===
-        _update_task(task_id, status="running", current_step="Step 1: 白图修复 (抠图)", progress=10)
-        try:
-            from pipeline.step1_extract import remove_background, create_main_image
-            extracted = remove_background(product_image, model=model)
+        result = GenerationService().execute_run(
+            product_id=product_id,
+            product_image_path=img_path,
+            model=model,
+            run_id=f"task_{task_id}",
+            progress=progress,
+        )
+        out_dir = Path(result["output_dir"])
+        for artifact in result["artifacts"]:
+            path = Path(artifact["path"])
+            if path.suffix.lower() != ".png":
+                continue
+            generated_images.append({
+                "name": artifact["name"],
+                "filename": path.name,
+                "type": artifact["type"],
+                "job_id": artifact.get("job_id"),
+                "metadata": artifact.get("metadata", {}),
+            })
 
-            extracted["transparent"].save(out_dir / "01_transparent.png", "PNG")
-            extracted["white_bg"].save(out_dir / "01_white_bg.png", "PNG")
-            generated_images.append({"name": "透明底图", "filename": "01_transparent.png", "type": "extract"})
-            generated_images.append({"name": "白底图", "filename": "01_white_bg.png", "type": "extract"})
-
-            main_white = create_main_image(extracted["white_bg"])
-            main_white.save(out_dir / "img01_white_main.png", "PNG")
-            generated_images.append({"name": "白底首图", "filename": "img01_white_main.png", "type": "main"})
-        except Exception as e:
-            traceback.print_exc()
-            _update_task(task_id, current_step=f"Step 1 失败: {e}")
-            # 继续执行，用原图兜底
-            extracted = {"transparent": product_image, "white_bg": product_image}
-
-        # === Step 2: 场景描述生成 ===
-        _update_task(task_id, current_step="Step 2: 场景描述生成 (LLM反推)", progress=30)
-        scenes = []
-        try:
-            from pipeline.step2_scene import generate_scene_descriptions
-            user_req = product_info.get("scene_requirements", "")
-            if isinstance(user_req, dict):
-                user_req = user_req.get("main_scene", "")
-            scenes = generate_scene_descriptions(
-                product_info=product_info,
-                user_requirements=user_req,
-                scene_count=scene_count,
-                product_image=product_image,
-            )
-            with open(out_dir / "scenes.json", "w", encoding="utf-8") as f:
-                json.dump(scenes, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            traceback.print_exc()
-            _update_task(task_id, current_step=f"Step 2 失败: {e}")
-
-        # === Step 3: 场景图合成 (为每个场景生成) ===
-        _update_task(task_id, current_step="Step 3: 场景图合成", progress=50)
-        try:
-            from pipeline.step3_compose import generate_scene_with_product
-            for si, scene in enumerate(scenes[:scene_count]):
-                scene_en = scene.get("description_en", "A modern luxury living room")
-                _update_task(task_id, current_step=f"Step 3: 场景 {si+1}/{min(len(scenes), scene_count)} 生成中...", progress=50 + si * 5)
-                scene_images = generate_scene_with_product(
-                    product_transparent=extracted["transparent"],
-                    scene_description=scene_en,
-                    model=model,
-                    candidates=1,
-                    scale_factor=0.75,
-                )
-                for i, img in enumerate(scene_images):
-                    fname = f"img_scene_{si+1}_v{i+1}.png"
-                    img.save(out_dir / fname, "PNG")
-                    scene_name = scene.get("name", f"场景 {si+1}")
-                    generated_images.append({"name": f"{scene_name}", "filename": fname, "type": "scene"})
-        except Exception as e:
-            traceback.print_exc()
-            _update_task(task_id, current_step=f"Step 3 失败: {e}")
-
-        # === Step 4: 细节图 (限制最多3张) ===
-        _update_task(task_id, current_step="Step 4: 细节图生成", progress=80)
-        try:
-            from pipeline.step4_enhance import generate_detail_crops
-            selling_points = product_info.get("selling_points", [])[:3]
-            if selling_points and product_image:
-                details = generate_detail_crops(extracted["white_bg"], selling_points)[:3]
-                for i, detail in enumerate(details):
-                    fname = f"img_detail_{i+1}.png"
-                    detail["crop"].save(out_dir / fname, "PNG")
-                    generated_images.append({"name": f"细节: {detail['selling_point'][:20]}", "filename": fname, "type": "detail"})
-        except Exception as e:
-            traceback.print_exc()
-            _update_task(task_id, current_step=f"Step 4 失败: {e}")
-
-        # === 完成 ===
         _update_task(task_id,
             status="done",
             current_step="完成",
             progress=100,
             output_dir=str(out_dir),
             images=generated_images,
+            jobs=result["jobs"],
+            traces=result["traces"],
         )
 
     except Exception as e:
+        traceback.print_exc()
         _update_task(task_id,
             status="error",
-            current_step=f"Pipeline 错误: {str(e)}",
+            current_step=f"Agent Workflow 错误: {str(e)}",
             progress=0,
-            output_dir=str(out_dir),
+            output_dir="",
             images=generated_images,
             error=str(e),
         )

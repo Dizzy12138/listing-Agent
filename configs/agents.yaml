@@ -1,0 +1,20 @@
+agents:
+  sku_understanding:
+    pattern: Generator
+    output_schema: SKU
+  asset_agent:
+    pattern: Tool Wrapper
+    tools: [background_removal, mask_generation, structure_reference]
+  view_agent:
+    pattern: Generator
+    tools: [controlled_view_generation, deterministic_mirror_fallback]
+  visual_strategy:
+    pattern: Generator
+  prompt_agent:
+    pattern: Generator
+  workflow_agent:
+    pattern: Pipeline
+  model_router:
+    pattern: Tool Wrapper
+  quality_agent:
+    pattern: Reviewer

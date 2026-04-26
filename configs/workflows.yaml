@@ -1,0 +1,24 @@
+workflows:
+  white_main:
+    image_types: [white_bg, main_white, main_white_background]
+    hard_gates:
+      - product structure must remain unchanged
+      - white background must be clean
+
+  scene_main:
+    image_types: [scene_main, main_scene, scene_lifestyle, lifestyle]
+    hard_gates:
+      - background must not contain generated cat tree
+      - composition must not contain checkerboard artifacts
+      - product must use selected view asset
+
+  detail:
+    image_types: [selling_point, feature_detail, detail]
+    hard_gates:
+      - one image must express one selling point
+      - local crop must not be stretched
+
+  size_compare:
+    image_types: [size_compare]
+    hard_gates:
+      - scale annotation must be readable

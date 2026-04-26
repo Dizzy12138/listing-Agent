@@ -60,6 +60,33 @@ image-demo/
 产品原图 → Step1:抠图 → Step2:场景反推 → Step3:合成 → Step4:光影 → Step5:文案 → 质量检测 → 输出
 ```
 
+## 配置驱动执行架构
+
+项目已从固定顺序脚本升级为：
+
+```
+SKU Schema
+  → ImagePlan
+  → ImageJob
+  → View Agent
+  → Workflow Registry
+  → Tool / Model Adapter
+  → Artifact + Trace
+```
+
+旧的 `pipeline/` 目录仍保留为底层工具函数，新入口是 `core/services/generation_service.py`。
+
+关键对象：
+
+- `core/schemas/sku.py`：SKU、ImagePlanItem、SceneRequirements、ViewStrategy。
+- `core/schemas/job.py`：ImageJob、Artifact、WorkflowResult、QualityReport。
+- `core/agents/view_agent.py`：为每个 ImageJob 绑定视角策略，避免所有图片角度完全一致。
+- `core/workflows/registry.py`：按 image type 分配 workflow。
+- `core/services/generation_service.py`：读取 SKU.image_plan，生成 ImageJob 并执行。
+- `core/tracing/trace.py`：记录 Agent/Workflow/Model 调用 Trace。
+
+现在 `main.py` 只是 CLI 入口，不再堆固定步骤。Web 任务也复用同一套 `GenerationService`。
+
 ## SKU Agent 平台规范
 
 当前原型已从“批量生图工具”升级为 SKU 视觉生产操作系统雏形，页面模块包含：
