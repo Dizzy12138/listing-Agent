@@ -30,21 +30,24 @@ class SceneMainWorkflow(BaseWorkflow):
                 artifacts.append(artifact)
                 context.trace.add(
                     step="view_agent.select",
-                    status="success",
+                    status="warning" if view_asset.issues else "success",
                     input={
                         "sku_id": context.sku.product_id,
                         "job_id": context.job.job_id,
                         "view_type": view_asset.view_type,
+                        "generation_mode": view_asset.mode,
                         "camera_angle": view_asset.spec.camera_angle,
                     },
                     output_artifact=artifact.path,
                     model=context.model,
+                    issues=view_asset.issues or [],
                 )
             return self.ok_result(context, artifacts, context.trace.records[-2:])
 
     def _scene_description(self, context: WorkflowContext) -> str:
         if context.scenes:
-            idx = min(max(context.job.image_index - 1, 0), len(context.scenes) - 1)
+            idx = int(context.job.params.get("scene_idx", 0))
+            idx = min(max(idx, 0), len(context.scenes) - 1)
             return context.scenes[idx].get("description_en") or context.scenes[0].get("description_en", "")
         return (
             f"{context.sku.scene_requirements.main_scene}. "

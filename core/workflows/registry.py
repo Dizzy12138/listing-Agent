@@ -31,4 +31,4 @@ def resolve_workflow(image_type: str) -> str:
         return "size_compare"
     if normalized == "multilingual_text":
         return "multilingual_text"
-    return "detail"
+    raise ValueError(f"Unsupported image_type: {image_type}")

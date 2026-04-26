@@ -10,6 +10,7 @@ from typing import Callable
 from PIL import Image
 
 from config import MODELS, OUTPUT_DIR, PRODUCTS_DIR
+from core.agents.quality_agent import QualityAgent
 from core.agents.view_agent import ViewAgent
 from core.schemas.job import Artifact, ImageJob, WorkflowResult
 from core.schemas.sku import SKU
@@ -39,8 +40,17 @@ class GenerationService:
 
     def build_jobs_from_sku(self, sku: SKU) -> list[ImageJob]:
         jobs: list[ImageJob] = []
+        scene_idx = 0
         for item in sku.image_plan:
             workflow_key = resolve_workflow(item.type)
+            params = {
+                "visual_goal": item.visual_goal,
+                "required_elements": item.required_elements,
+                "forbidden_elements": item.forbidden_elements,
+            }
+            if workflow_key == "scene_main":
+                params["scene_idx"] = scene_idx
+                scene_idx += 1
             jobs.append(ImageJob(
                 job_id=f"{sku.product_id}_{item.index}",
                 sku_id=sku.product_id,
@@ -49,11 +59,7 @@ class GenerationService:
                 description=item.description,
                 workflow_key=workflow_key,
                 view_type=item.view_type,
-                params={
-                    "visual_goal": item.visual_goal,
-                    "required_elements": item.required_elements,
-                    "forbidden_elements": item.forbidden_elements,
-                },
+                params=params,
             ))
         return jobs
 
@@ -93,8 +99,16 @@ class GenerationService:
         with open(output_dir / "scenes.json", "w", encoding="utf-8") as f:
             json.dump(scenes, f, ensure_ascii=False, indent=2)
 
-        jobs = self.build_jobs_from_sku(sku)
         view_agent = ViewAgent(output_dir)
+        jobs = view_agent.allocate_views(sku, self.build_jobs_from_sku(sku))
+        quality_agent = QualityAgent()
+        view_distribution = quality_agent.evaluate_view_distribution(jobs)
+        trace.add(
+            step="quality_agent.view_distribution",
+            status="warning" if view_distribution["issues"] else "success",
+            input={"sku_id": sku.product_id},
+            issues=view_distribution["issues"],
+        )
         results: list[WorkflowResult] = []
         artifacts: list[Artifact] = [
             Artifact(artifact_id=f"{run_id}_original", type="original", name="original.png", path=str(output_dir / "original.png")),
@@ -118,6 +132,13 @@ class GenerationService:
                 model=model,
             )
             result = workflow_cls().run(context)
+            result.quality = quality_agent.evaluate_artifacts(job, result.artifacts)
+            trace.add(
+                step="quality_agent.evaluate_artifacts",
+                status=result.quality.status,
+                input={"job_id": job.job_id, "artifact_count": len(result.artifacts)},
+                issues=result.quality.issues,
+            )
             results.append(result)
             artifacts.extend(result.artifacts)
 
@@ -134,6 +155,7 @@ class GenerationService:
             "jobs": [job.model_dump() for job in jobs],
             "artifacts": [artifact.model_dump() for artifact in artifacts],
             "results": [result.model_dump() for result in results],
+            "view_distribution": view_distribution,
             "traces": trace.records,
         }
 

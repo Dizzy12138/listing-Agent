@@ -9,6 +9,7 @@ class ViewSpec(BaseModel):
     composition: str
     purpose: str
     strength: float = 0.7
+    generation_mode: str = "reuse"
 
 
 CAT_TREE_VIEW_PRESETS: dict[str, ViewSpec] = {
@@ -18,6 +19,7 @@ CAT_TREE_VIEW_PRESETS: dict[str, ViewSpec] = {
         composition="full product, open structure visible",
         purpose="show full structure clearly",
         strength=0.65,
+        generation_mode="reuse",
     ),
     "left_45": ViewSpec(
         view_type="left_45",
@@ -25,6 +27,7 @@ CAT_TREE_VIEW_PRESETS: dict[str, ViewSpec] = {
         composition="show depth and layered platforms",
         purpose="show depth and layered structure",
         strength=0.7,
+        generation_mode="model_synthesis",
     ),
     "right_45": ViewSpec(
         view_type="right_45",
@@ -32,6 +35,7 @@ CAT_TREE_VIEW_PRESETS: dict[str, ViewSpec] = {
         composition="show opposite side and avoid repeated product angle",
         purpose="avoid repeated product angle",
         strength=0.7,
+        generation_mode="mirror",
     ),
     "low_angle_hero": ViewSpec(
         view_type="low_angle_hero",
@@ -39,6 +43,7 @@ CAT_TREE_VIEW_PRESETS: dict[str, ViewSpec] = {
         composition="floor-to-ceiling hero composition",
         purpose="make the product look tall and impressive",
         strength=0.8,
+        generation_mode="model_synthesis",
     ),
     "detail_closeup": ViewSpec(
         view_type="detail_closeup",
@@ -46,5 +51,6 @@ CAT_TREE_VIEW_PRESETS: dict[str, ViewSpec] = {
         composition="material detail, sisal rope, plush fabric, platform edges",
         purpose="show materials and details",
         strength=0.75,
+        generation_mode="crop",
     ),
 }

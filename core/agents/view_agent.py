@@ -6,6 +6,7 @@ from pathlib import Path
 from PIL import Image
 
 from core.schemas.sku import SKU
+from core.schemas.job import ImageJob
 from core.schemas.view import CAT_TREE_VIEW_PRESETS, ViewSpec
 
 
@@ -16,6 +17,8 @@ class ViewAsset:
     image: Image.Image
     path: Path | None = None
     generated: bool = False
+    mode: str = "reuse"
+    issues: list[str] | None = None
 
 
 class ViewAgent:
@@ -29,6 +32,20 @@ class ViewAgent:
 
     def __init__(self, output_dir: Path):
         self.output_dir = output_dir
+
+    def allocate_views(self, sku: SKU, jobs: list[ImageJob]) -> list[ImageJob]:
+        """Assign views across the whole plan so repeated angles are explicit."""
+        used: dict[str, int] = {}
+        defaults = list(sku.view_strategy.default_views)
+        allocated: list[ImageJob] = []
+        for job in jobs:
+            view_type = job.view_type or self.resolve_view(sku, job.image_type).view_type
+            if sku.view_strategy.avoid_repeated_view and used.get(view_type, 0) >= sku.view_strategy.max_same_view_count:
+                replacement = next((view for view in defaults if used.get(view, 0) < sku.view_strategy.max_same_view_count), view_type)
+                view_type = replacement
+            used[view_type] = used.get(view_type, 0) + 1
+            allocated.append(job.model_copy(update={"view_type": view_type}))
+        return allocated
 
     def resolve_view(self, sku: SKU, image_type: str, requested_view: str | None = None) -> ViewSpec:
         if requested_view:
@@ -51,17 +68,36 @@ class ViewAgent:
         requested_view: str | None = None,
     ) -> ViewAsset:
         spec = self.resolve_view(sku, image_type, requested_view)
-        image = self._generate_controlled_view(base_subject, spec)
-        return ViewAsset(view_type=spec.view_type, spec=spec, image=image, generated=spec.view_type != "front_open")
+        image, issues = self._generate_controlled_view(base_subject, spec)
+        return ViewAsset(
+            view_type=spec.view_type,
+            spec=spec,
+            image=image,
+            generated=spec.generation_mode not in {"reuse"},
+            mode=spec.generation_mode,
+            issues=issues,
+        )
 
     def _preset(self, view_type: str) -> ViewSpec:
         return CAT_TREE_VIEW_PRESETS.get(view_type, CAT_TREE_VIEW_PRESETS["front_open"])
 
-    def _generate_controlled_view(self, base_subject: Image.Image, spec: ViewSpec) -> Image.Image:
-        # Conservative PoC behavior: never invent structure in deterministic mode.
-        # For left/right views, mirroring creates a visibly different direction
-        # while preserving all visible product geometry.
+    def _generate_controlled_view(self, base_subject: Image.Image, spec: ViewSpec) -> tuple[Image.Image, list[str]]:
         rgba = base_subject.convert("RGBA")
-        if spec.view_type == "right_45":
-            return rgba.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
-        return rgba
+        if spec.generation_mode == "mirror":
+            return rgba.transpose(Image.Transpose.FLIP_LEFT_RIGHT), []
+        if spec.generation_mode == "crop":
+            return self._crop_detail(rgba), []
+        if spec.generation_mode == "model_synthesis":
+            # Explicit capability boundary: real view synthesis is not enabled
+            # in the PoC because it can hallucinate product structure.
+            return rgba, ["model_synthesis_not_implemented"]
+        return rgba, []
+
+    def _crop_detail(self, image: Image.Image) -> Image.Image:
+        w, h = image.size
+        box = (int(w * 0.18), int(h * 0.12), int(w * 0.82), int(h * 0.88))
+        crop = image.crop(box)
+        canvas = Image.new("RGBA", image.size, (255, 255, 255, 0))
+        crop.thumbnail((int(w * 0.9), int(h * 0.9)), Image.Resampling.LANCZOS)
+        canvas.paste(crop, ((w - crop.width) // 2, (h - crop.height) // 2), crop)
+        return canvas

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+import uuid
 
 from PIL import Image
 
@@ -33,8 +34,9 @@ class BaseWorkflow:
         filename = f"img{context.job.image_index:02d}_{stem}.png"
         path = context.output_dir / filename
         image.save(path, "PNG")
+        artifact_id = f"{context.job.job_id}_{artifact_type}_{path.stem}_{uuid.uuid4().hex[:6]}"
         return Artifact(
-            artifact_id=f"{context.job.job_id}_{artifact_type}",
+            artifact_id=artifact_id,
             job_id=context.job.job_id,
             type=artifact_type,
             name=filename,
@@ -50,6 +52,6 @@ class BaseWorkflow:
         return WorkflowResult(
             job=context.job,
             artifacts=artifacts,
-            quality=QualityReport(score=85, status="pending_review", issues=[]),
+            quality=QualityReport(score=0, status="pending_evaluation", issues=[]),
             traces=traces or [],
         )

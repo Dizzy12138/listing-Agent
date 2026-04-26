@@ -87,6 +87,30 @@ SKU Schema
 
 现在 `main.py` 只是 CLI 入口，不再堆固定步骤。Web 任务也复用同一套 `GenerationService`。
 
+### View Agent 能力边界
+
+当前 `ViewAgent` 是“视角意图 + 保守执行”层，不把 PoC 能力包装成真正多视角重建。
+
+视角模式：
+
+- `reuse`：复用标准主体资产。
+- `mirror`：镜像主体资产，作为保守兜底。
+- `crop`：从标准主体资产生成细节视角。
+- `model_synthesis`：真实多视角重建入口，当前不会自动启用；Trace 会记录 `model_synthesis_not_implemented`。
+
+这意味着当前系统已经能追踪每张图的视角意图、执行模式和重复情况，但 `low_angle_hero` / `left_45` 的真实视角重建仍属于下一阶段能力。
+
+### 质量与 Trace
+
+`GenerationService` 会统一做基础质量评估：
+
+- 是否有输出产物
+- 图片尺寸是否过小
+- 场景图是否出现透明棋盘格/白块伪影
+- `view_distribution` 是否存在重复视角
+
+所有结果会写入输出目录的 `trace.json`。
+
 ## SKU Agent 平台规范
 
 当前原型已从“批量生图工具”升级为 SKU 视觉生产操作系统雏形，页面模块包含：
