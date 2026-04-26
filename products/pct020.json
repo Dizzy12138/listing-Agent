@@ -1,0 +1,54 @@
+{
+    "product_id": "PCT020",
+    "name": "205cm XXL Cat Tree Tower",
+    "description": "全新品205cm（XXL）猫爬架，定位大猫多猫，视觉效果显大，动线丰富，双地板更稳定",
+    "positioning": "大且坚固，适合大猫、多猫家庭，家庭有小朋友，家庭收入中等偏上",
+    "target_audience": "养大猫(缅因猫/布偶/英短)、多猫家庭、有小朋友的家庭、中高收入人群",
+    "selling_points": [
+        "配备2个猫抓板+6根剑麻柱，充分满足猫的抓挠需求",
+        "6个休息区域，满足多猫家庭使用",
+        "各区域尺寸大，适合各种体型猫咪使用",
+        "产品下半部横向延展，改善活动路线的合理性并提升趣味性",
+        "双底板，增强产品稳定性"
+    ],
+    "keywords": [
+        "cat tree", "cat tower", "cat tree tower", "cat trees",
+        "cat tower with scratching post", "cat tree for indoor cats large adult",
+        "cat tree for large cat", "tall cat tree", "cat tower for large cats",
+        "large cat tree"
+    ],
+    "keyword_embedding": {
+        "cat house": "SP2 - 休息区域",
+        "cat bed": "SP2 - 休息区域",
+        "cat scratching post": "SP1 - 抓挠系统",
+        "cat toys": "SP4 - 活动路线",
+        "cat toy": "SP4 - 活动路线"
+    },
+    "scene_requirements": {
+        "main_scene": "有大的压迫感，底部接近图片底部，场景图可以是豪华一点的大房子的客厅场景，可以增加一个小朋友，亲子和猫猫的互动",
+        "visual_goals": [
+            "首图视觉效果要显大，仰拍或其他最显大视角放大",
+            "选择产品开放式的视觉角度",
+            "比例显大：顶到天花板，底部到底",
+            "多猫，含大猫-缅因猫，选用一只大猫带来显大的视觉冲击"
+        ],
+        "cat_breeds": ["缅因猫(Maine Coon)", "波斯猫(Persian)", "英短(British Shorthair)", "布偶猫(Ragdoll)"]
+    },
+    "image_plan": [
+        {"index": 1, "type": "white_bg", "description": "白底首图，产品占比85%+，开放式视角显大"},
+        {"index": 2, "type": "scene_main", "description": "场景首图，豪华客厅，缅因猫+多猫，压迫感显大"},
+        {"index": 3, "type": "selling_point", "description": "卖点图-6个休息区域，多猫多区域标注"},
+        {"index": 4, "type": "selling_point", "description": "卖点图-抓挠系统，剑麻柱+猫抓板"},
+        {"index": 5, "type": "selling_point", "description": "卖点图-双底板稳定性"},
+        {"index": 6, "type": "detail", "description": "细节图-材质工艺（绒布/剑麻/板材）"},
+        {"index": 7, "type": "scene_lifestyle", "description": "场景图-亲子互动，小朋友和猫咪"},
+        {"index": 8, "type": "selling_point", "description": "动线展示图-攀爬路径标注"},
+        {"index": 9, "type": "size_compare", "description": "尺寸对比图-205cm标注，人猫比例"}
+    ],
+    "competitors": [
+        "https://www.amazon.com/Globlazer-F70-Pro-Scratching-Hammock/dp/B0DGKR5MMP",
+        "https://www.amazon.com/Globlazer-F80-Multiple-Scratching-Hammock/dp/B0CV7DHG98",
+        "https://www.amazon.com/Globlazer-Sturdy-Biggest-Scratching-Hammock/dp/B0CNCHGMCX"
+    ],
+    "internal_refs": ["PCT008", "PCT182", "PCT190"]
+}
