@@ -1,3 +1,11 @@
+"""
+SizeCompareWorkflow — improved layout.
+
+Key rules:
+- Title and product are in separate zones — title never overlaps product.
+- Real 205cm vertical dimension line with arrow caps and proper spacing.
+- Product is fully visible, unobstructed.
+"""
 from __future__ import annotations
 
 from PIL import Image
@@ -31,32 +39,67 @@ class SizeCompareWorkflow(BaseWorkflow):
             return self.ok_result(context, [artifact], context.trace.records[-2:])
 
     def _render(self, context: WorkflowContext) -> Image.Image:
+        canvas = Image.new("RGB", (1500, 1500), "#ffffff")
+        draw = ImageDraw.Draw(canvas)
+        title_font = _load_font(54, bold=True)
+        body_font = _load_font(32)
+        dim_label_font = _load_font(52, bold=True)
+        dim_unit_font = _load_font(30)
+
+        # ===== TITLE ZONE: top band (0-200px), completely separate from product =====
+        draw.rectangle((0, 0, 1500, 200), fill="#f8fafc")
+        draw.line((0, 200, 1500, 200), fill="#e2e8f0", width=2)
+        draw.text((80, 50), "205cm XXL Cat Tree Tower", font=title_font, fill="#172033")
+        draw.text((82, 120), "Full front view with real height reference", font=body_font, fill="#536173")
+
+        # ===== PRODUCT ZONE: 220-1380px, centered =====
         product = context.base_assets["white_bg"].copy().convert("RGB")
         content = product.crop(_content_bbox(product))
-        out = _fit_image(content, (940, 1080), background=(255, 255, 255))
-        canvas = Image.new("RGB", (1500, 1500), "#ffffff")
-        canvas.paste(out, (350, 260))
-        draw = ImageDraw.Draw(canvas)
-        title_font = _load_font(58, bold=True)
-        body_font = _load_font(34)
-        label_font = _load_font(48, bold=True)
+        # Product fits in a zone that leaves room for the dimension line on the left
+        product_zone_left = 380
+        product_zone_top = 230
+        product_zone_w = 950
+        product_zone_h = 1130
+        out = _fit_image(content, (product_zone_w, product_zone_h), background=(255, 255, 255))
+        canvas.paste(out, (product_zone_left, product_zone_top))
 
-        # Header stays outside the product safe area.
-        draw.text((95, 86), "205cm XXL Cat Tree Tower", font=title_font, fill="#172033")
-        draw.text((98, 158), "Full front view with clear height reference", font=body_font, fill="#536173")
+        # ===== DIMENSION LINE: left side, vertically aligned with product =====
+        dim_x = 280  # x position of the dimension line
+        dim_top = product_zone_top + 20
+        dim_bottom = product_zone_top + product_zone_h - 20
 
-        # Vertical dimension line placed beside the product, never on top of it.
-        x = 265
-        y1, y2 = 285, 1308
-        draw.line((x, y1, x, y2), fill="#2563eb", width=8)
-        draw.line((x - 42, y1, x + 42, y1), fill="#2563eb", width=8)
-        draw.line((x - 42, y2, x + 42, y2), fill="#2563eb", width=8)
-        draw.polygon([(x, y1 - 26), (x - 18, y1 + 8), (x + 18, y1 + 8)], fill="#2563eb")
-        draw.polygon([(x, y2 + 26), (x - 18, y2 - 8), (x + 18, y2 - 8)], fill="#2563eb")
-        draw.rounded_rectangle((90, 720, 235, 835), radius=18, fill="#eff6ff", outline="#2563eb", width=3)
-        draw.text((113, 748), "205", font=label_font, fill="#1d4ed8")
-        draw.text((130, 798), "cm", font=body_font, fill="#1d4ed8")
+        # Main vertical line
+        draw.line((dim_x, dim_top, dim_x, dim_bottom), fill="#2563eb", width=6)
 
-        draw.rounded_rectangle((1060, 1230, 1405, 1330), radius=18, fill="#f8fafc", outline="#d8dee6", width=2)
-        draw.text((1090, 1260), "Complete structure shown", font=body_font, fill="#475569")
+        # Top arrow cap + horizontal tick
+        draw.line((dim_x - 36, dim_top, dim_x + 36, dim_top), fill="#2563eb", width=6)
+        draw.polygon([
+            (dim_x, dim_top - 24),
+            (dim_x - 16, dim_top + 6),
+            (dim_x + 16, dim_top + 6),
+        ], fill="#2563eb")
+
+        # Bottom arrow cap + horizontal tick
+        draw.line((dim_x - 36, dim_bottom, dim_x + 36, dim_bottom), fill="#2563eb", width=6)
+        draw.polygon([
+            (dim_x, dim_bottom + 24),
+            (dim_x - 16, dim_bottom - 6),
+            (dim_x + 16, dim_bottom - 6),
+        ], fill="#2563eb")
+
+        # Dimension label box centered on the line
+        label_center_y = (dim_top + dim_bottom) // 2
+        label_box = (dim_x - 80, label_center_y - 55, dim_x + 80, label_center_y + 55)
+        draw.rounded_rectangle(label_box, radius=16, fill="#eff6ff", outline="#2563eb", width=3)
+        draw.text((dim_x - 52, label_center_y - 42), "205", font=dim_label_font, fill="#1d4ed8")
+        draw.text((dim_x - 22, label_center_y + 14), "cm", font=dim_unit_font, fill="#1d4ed8")
+
+        # ===== BOTTOM INFO BAR =====
+        draw.rectangle((0, 1400, 1500, 1500), fill="#f8fafc")
+        draw.line((0, 1400, 1500, 1400), fill="#e2e8f0", width=2)
+        draw.rounded_rectangle((80, 1420, 450, 1480), radius=14, fill="#eff6ff", outline="#2563eb", width=2)
+        draw.text((100, 1434), "Full structure visible", font=body_font, fill="#1d4ed8")
+        draw.rounded_rectangle((500, 1420, 850, 1480), radius=14, fill="#f0fdf4", outline="#16a34a", width=2)
+        draw.text((520, 1434), "Real height: 205cm", font=body_font, fill="#166534")
+
         return canvas

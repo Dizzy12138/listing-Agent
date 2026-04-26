@@ -1,3 +1,13 @@
+"""
+QualityAgent — upgraded with hard gating rules.
+
+Key rules enforced:
+- scene workflow rough_only / blocked → quality status = fail / blocked
+- model_synthesis_not_implemented on scene_main → cannot pass
+- SceneRequirementChecker missing elements (cats/child) → cannot pass
+- checkerboard in any formal image → fail
+- annotation elements must exist in metadata
+"""
 from __future__ import annotations
 
 from collections import Counter
@@ -15,13 +25,53 @@ class QualityAgent:
         fatal_issues: list[str] = []
         review_issues: list[str] = []
         image_artifacts = [a for a in artifacts if Path(a.path).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}]
-        if not image_artifacts:
+        blocked_reports = [a for a in artifacts if a.type == "blocked_report"]
+
+        # ---- Hard gate: blocked reports mean this job cannot pass ----
+        if blocked_reports:
+            for br in blocked_reports:
+                reason = br.metadata.get("blocked_reason", "unknown")
+                fatal_issues.append(f"output blocked: {reason}")
+
+        if not image_artifacts and not blocked_reports:
             fatal_issues.append("no output image artifact")
 
         for artifact in image_artifacts:
             view_issues = artifact.metadata.get("view_issues", [])
+            scene_mode = artifact.metadata.get("scene_generation_mode", "")
+            image_type = job.image_type.lower()
+
+            # ---- Hard gate: scene mode checks ----
+            if scene_mode == "rough_only":
+                fatal_issues.append("scene is rough_only: fusion not supported, cannot be formal output")
+            elif scene_mode == "blocked":
+                fatal_issues.append("scene is blocked: core capability missing")
+
+            # ---- Hard gate: model_synthesis_not_implemented on scene_main ----
             if "model_synthesis_not_implemented" in view_issues:
-                review_issues.append("requested view requires model synthesis but not implemented")
+                if image_type in {"scene_main", "main_scene", "scene_lifestyle", "lifestyle"}:
+                    fatal_issues.append(
+                        "scene_main/scene_lifestyle requires model synthesis but not implemented; "
+                        "cannot pass as formal output"
+                    )
+                elif artifact.type == "scene":
+                    fatal_issues.append("scene artifact has model_synthesis_not_implemented in view_issues")
+                else:
+                    review_issues.append("requested view requires model synthesis but not implemented")
+
+            # ---- Hard gate: SceneRequirementChecker ----
+            scene_req = artifact.metadata.get("scene_requirement_check", {})
+            if scene_req:
+                req_status = scene_req.get("status", "")
+                missing = scene_req.get("missing_elements", [])
+                if req_status == "manual_required":
+                    review_issues.append(f"scene requirement check is manual_required; missing: {missing}")
+                elif req_status == "fail":
+                    fatal_issues.append(f"scene requirement check failed; missing: {missing}")
+                elif req_status == "needs_review":
+                    review_issues.append(f"scene requirement check needs_review; missing: {missing}")
+
+            # ---- Image quality checks ----
             try:
                 image = Image.open(artifact.path)
             except OSError:
@@ -30,8 +80,16 @@ class QualityAgent:
             w, h = image.size
             if w < 1000 or h < 1000:
                 review_issues.append(f"image too small: {artifact.name} {w}x{h}")
-            if artifact.type in {"main", "scene", "selling_point", "size_compare"} and has_checkerboard_artifact(image):
-                fatal_issues.append(f"checkerboard or white block artifact: {artifact.name}")
+
+            # Checkerboard check on ALL formal image types
+            if artifact.type in {"main", "scene", "selling_point", "size_compare", "detail"}:
+                if has_checkerboard_artifact(image):
+                    fatal_issues.append(f"checkerboard or white block artifact: {artifact.name}")
+
+            # Even rough_scene images get a checkerboard flag
+            if artifact.type == "rough_scene" and has_checkerboard_artifact(image):
+                review_issues.append(f"rough scene has checkerboard artifact: {artifact.name}")
+
             self._business_quality_checks(job, artifact, fatal_issues, review_issues)
 
         issues = fatal_issues + review_issues
@@ -60,26 +118,57 @@ class QualityAgent:
         image_type = job.image_type.lower()
 
         if artifact.type == "scene":
-            if metadata.get("fusion_status") == "fallback_rough":
-                review_issues.append("scene fusion model failed; rough composite fallback requires review")
+            fusion_status = metadata.get("fusion_status", "")
+            scene_mode = metadata.get("scene_generation_mode", "")
+
+            # If fusion was not successful, the scene is not qualified
+            if fusion_status not in {"fused"} and scene_mode != "true_fusion":
+                fatal_issues.append(f"scene fusion not confirmed (fusion_status={fusion_status}, mode={scene_mode})")
+
+            # Prompt element check
             prompt = str(metadata.get("scene_prompt", "")).lower()
             requires_life = any(k in prompt for k in ["cat", "cats", "child", "family", "interaction", "maine coon"])
-            if requires_life and metadata.get("fusion_status") != "fused":
-                review_issues.append("scene prompt requires cats/child/family interaction but final image is not confirmed fused")
+            if requires_life:
+                scene_req = metadata.get("scene_requirement_check", {})
+                if scene_req.get("status") in {"manual_required", "fail", "needs_review"}:
+                    missing = scene_req.get("missing_elements", [])
+                    review_issues.append(
+                        f"scene prompt requires living elements but requirement check status="
+                        f"{scene_req.get('status')}, missing={missing}"
+                    )
 
         if artifact.type == "selling_point":
             annotation_type = metadata.get("annotation_type", "")
             title = str(metadata.get("title", "")).lower()
-            if not metadata.get("has_annotation"):
+            has_annotation = metadata.get("has_annotation", False)
+
+            if not has_annotation:
                 fatal_issues.append("selling point image missing annotation metadata")
-            if annotation_type == "climbing_path" and "path" not in title and "climbing" not in title:
-                review_issues.append("climbing path selling point title does not match path annotation")
-            if annotation_type == "resting_areas" and "6" not in title:
-                review_issues.append("resting area selling point missing numbered-area title")
-            if annotation_type == "stability_base" and "base" not in title:
-                review_issues.append("stability selling point does not emphasize base")
-            if annotation_type == "scratching_system" and "scratch" not in title and "sisal" not in title:
-                review_issues.append("scratching selling point does not emphasize scratching system")
+
+            # Verify annotation elements were actually drawn
+            if annotation_type == "resting_areas":
+                if "6" not in title:
+                    review_issues.append("resting area selling point missing numbered-area title")
+                if not metadata.get("annotation_badges_drawn"):
+                    review_issues.append("resting areas: numbered badges may not be visible in output")
+
+            if annotation_type == "climbing_path":
+                if "path" not in title and "climbing" not in title:
+                    review_issues.append("climbing path selling point title does not match path annotation")
+                if not metadata.get("annotation_arrows_drawn"):
+                    review_issues.append("climbing path: route arrows may not be visible in output")
+
+            if annotation_type == "stability_base":
+                if "base" not in title:
+                    review_issues.append("stability selling point does not emphasize base")
+                if not metadata.get("annotation_highlight_drawn"):
+                    review_issues.append("stability base: highlight box may not be visible in output")
+
+            if annotation_type == "scratching_system":
+                if "scratch" not in title and "sisal" not in title:
+                    review_issues.append("scratching selling point does not emphasize scratching system")
+                if not metadata.get("annotation_highlights_drawn"):
+                    review_issues.append("scratching system: highlight boxes may not be visible in output")
 
         if artifact.type == "size_compare" or image_type == "size_compare":
             if not metadata.get("has_dimension_line") or "205" not in str(metadata.get("dimension_label", "")):

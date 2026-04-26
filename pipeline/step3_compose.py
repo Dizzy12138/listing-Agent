@@ -228,22 +228,38 @@ def has_checkerboard_artifact(image: Image.Image) -> bool:
     return neutral_ratio > 0.40 and light_ratio > 0.16 and mid_ratio > 0.08 and alternating_ratio > 0.30
 
 
-def image_edit_fusion(
+def multi_input_fusion_adapter(
     background: Image.Image,
     product_subject: Image.Image,
     rough_composite: Image.Image,
     scene_prompt: str,
     model: str = "gpt-image-2",
-) -> tuple[Image.Image, list[str]]:
+) -> tuple[Image.Image | None, str, list[str]]:
     """
-    Fuse a rough product composite into the scene with an image-edit model.
+    Attempt true multi-input fusion (background + product + rough).
 
-    The current adapter sends the rough composite as the edit source because the
-    local model wrapper supports single-image edits. Background/product are kept
-    in the signature so the workflow contract already matches the production
-    fusion step.
+    Returns
+    -------
+    (fused_image_or_None, fusion_mode, issues)
+        fusion_mode: "true_fusion" | "single_edit_fallback" | "fusion_not_supported"
     """
-    del background, product_subject
+    # -----------------------------------------------------------------
+    # Probe: does the current model SDK support multi-image input?
+    # gpt-image-2 /v1/images/edits accepts a single image + prompt.
+    # Gemini multimodal can accept multiple images but through
+    # generate_content, not an edit endpoint.
+    # Until the SDK supports genuine multi-image fusion, we report
+    # fusion_not_supported instead of silently discarding inputs.
+    # -----------------------------------------------------------------
+    supports_multi_input = False  # hardcoded until SDK upgrade
+
+    if supports_multi_input:
+        # ---- True multi-input path (placeholder for future SDK) ----
+        # fused = true_multi_fusion(background, product_subject, rough_composite, ...)
+        # return fused, "true_fusion", []
+        pass
+
+    # ---- Single-edit fallback: refine the rough composite ----
     prompt = (
         f"{scene_prompt}\n\n"
         "Edit this rough ecommerce composite into a realistic final scene. "
@@ -263,15 +279,48 @@ def image_edit_fusion(
             size="1536x1024",
             quality="high",
         )
-    except Exception as exc:  # pragma: no cover - network/model failures are runtime dependent
-        return rough_composite, [f"image_edit_fusion_failed: {exc}"]
+    except Exception as exc:  # pragma: no cover - network/model failures
+        return None, "fusion_not_supported", [f"single_edit_failed: {exc}"]
+
     if not results:
-        return rough_composite, ["image_edit_fusion_failed: no image returned"]
-    fused = results[0].convert("RGB")
-    issues: list[str] = []
-    if has_checkerboard_artifact(fused):
+        return None, "fusion_not_supported", ["single_edit_returned_no_image"]
+
+    refined = results[0].convert("RGB")
+    issues: list[str] = ["fusion_not_supported"]
+    if has_checkerboard_artifact(refined):
         issues.append("image_edit_fusion_checkerboard_artifact")
-    return fused, issues
+    # The refined image is better than raw rough, but it is NOT a true
+    # multi-input fusion.  The caller must treat it as rough_only.
+    return refined, "fusion_not_supported", issues
+
+
+def image_edit_fusion(
+    background: Image.Image,
+    product_subject: Image.Image,
+    rough_composite: Image.Image,
+    scene_prompt: str,
+    model: str = "gpt-image-2",
+) -> tuple[Image.Image, list[str], str]:
+    """
+    Fuse a rough product composite into the scene.
+
+    Returns (image, issues, fusion_mode).
+    fusion_mode is one of: "true_fusion", "fusion_not_supported".
+
+    When fusion_not_supported, the returned image is a refined rough
+    composite — NOT a production-grade fused scene.  The workflow must
+    NOT output it as a formal scene image.
+    """
+    fused, mode, issues = multi_input_fusion_adapter(
+        background=background,
+        product_subject=product_subject,
+        rough_composite=rough_composite,
+        scene_prompt=scene_prompt,
+        model=model,
+    )
+    if fused is None:
+        return rough_composite, issues, mode
+    return fused, issues, mode
 
 
 def generate_scene_with_product(
