@@ -11,8 +11,10 @@ from PIL import Image
 
 from config import MODELS, OUTPUT_DIR, PRODUCTS_DIR
 from core.agents.asset_quality_gate import AssetQualityGate
+from core.agents.product_vision_agent import ProductVisionAgent
 from core.agents.quality_agent import QualityAgent
 from core.agents.view_agent import ViewAgent
+from core.agents.view_reconstruction_agent import ViewReconstructionAgent
 from core.schemas.job import Artifact, ImageJob, WorkflowResult
 from core.schemas.sku import SKU
 from core.services.sku_service import SKUService
@@ -85,6 +87,7 @@ class GenerationService:
         shutil.copy(image_path, output_dir / "original.png")
         product_image = Image.open(image_path).copy().convert("RGB")
 
+        # ---- Step 1: Asset extraction ----
         self._progress(progress, "AssetAgent: 主体标准化", 10)
         extracted = remove_background(product_image, model=model)
         extracted["transparent"].save(output_dir / "01_transparent.png", "PNG")
@@ -100,13 +103,38 @@ class GenerationService:
             issues=asset_quality["issues"],
         )
 
+        # ---- Step 2: ProductVisionAgent — structural analysis ----
+        self._progress(progress, "VisionAgent: 产品结构分析", 15)
+        vision_agent = ProductVisionAgent()
+        product_analysis = vision_agent.analyze(extracted["white_bg"])
+
+        # Save analysis to output
+        analysis_path = output_dir / "product_analysis.json"
+        with open(analysis_path, "w", encoding="utf-8") as f:
+            json.dump(product_analysis, f, ensure_ascii=False, indent=2, default=str)
+        trace.add(
+            step="vision_agent.product_analysis",
+            status="success" if product_analysis.get("source") == "vlm" else "warning",
+            input={"sku_id": sku.product_id},
+            output_artifact=str(analysis_path),
+            issues=["fallback analysis used"] if product_analysis.get("source") == "fallback" else [],
+        )
+
+        # Inject agents and analysis into base_assets for downstream workflows
+        extracted["_product_analysis"] = product_analysis
+        extracted["_vision_agent"] = vision_agent
+        extracted["_view_recon_agent"] = ViewReconstructionAgent(model=model)
+
+        # ---- Step 3: Scene descriptions ----
+        self._progress(progress, "SceneAgent: 场景描述生成", 20)
         scenes = self._generate_scenes(sku, product_image, model)
         with open(output_dir / "scenes.json", "w", encoding="utf-8") as f:
             json.dump(scenes, f, ensure_ascii=False, indent=2)
 
+        # ---- Step 4: Job allocation and quality setup ----
         view_agent = ViewAgent(output_dir)
         jobs = view_agent.allocate_views(sku, self.build_jobs_from_sku(sku))
-        quality_agent = QualityAgent()
+        quality_agent = QualityAgent(vision_agent=vision_agent)
         view_distribution = quality_agent.evaluate_view_distribution(jobs)
         trace.add(
             step="quality_agent.view_distribution",
@@ -114,6 +142,8 @@ class GenerationService:
             input={"sku_id": sku.product_id},
             issues=view_distribution["issues"],
         )
+
+        # ---- Step 5: Execute workflows ----
         results: list[WorkflowResult] = []
         artifacts: list[Artifact] = [
             Artifact(artifact_id=f"{run_id}_original", type="original", name="original.png", path=str(output_dir / "original.png")),

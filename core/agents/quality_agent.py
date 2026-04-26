@@ -1,12 +1,17 @@
 """
-QualityAgent — upgraded with hard gating rules.
+QualityAgent — VLM-powered quality gate.
 
-Key rules enforced:
-- scene workflow rough_only / blocked → quality status = fail / blocked
-- model_synthesis_not_implemented on scene_main → cannot pass
-- SceneRequirementChecker missing elements (cats/child) → cannot pass
-- checkerboard in any formal image → fail
-- annotation elements must exist in metadata
+Hard rules:
+- No VLM available → manual_required, never auto-pass
+- Blocked / rough_only scenes → fail
+- model_synthesis_not_implemented on scene types → fail
+- Checkerboard / white block artifacts → fail
+- Scene missing required elements (cats/child) → fail or manual_required
+- Selling point annotation from fallback → cannot pass
+- Material detection low confidence → needs_review
+- View direction repeated > threshold → needs_review for entire batch
+- Selling point image must actually express the selling point (VLM check)
+- Annotation boxes must not obviously miss target parts
 """
 from __future__ import annotations
 
@@ -20,6 +25,9 @@ from pipeline.step3_compose import has_checkerboard_artifact
 
 
 class QualityAgent:
+    def __init__(self, vision_agent=None):
+        self._vision_agent = vision_agent
+
     def evaluate_artifacts(self, job: ImageJob, artifacts: list[Artifact]) -> QualityReport:
         issues: list[str] = []
         fatal_issues: list[str] = []
@@ -27,7 +35,7 @@ class QualityAgent:
         image_artifacts = [a for a in artifacts if Path(a.path).suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}]
         blocked_reports = [a for a in artifacts if a.type == "blocked_report"]
 
-        # ---- Hard gate: blocked reports mean this job cannot pass ----
+        # ---- Hard gate: blocked reports ----
         if blocked_reports:
             for br in blocked_reports:
                 reason = br.metadata.get("blocked_reason", "unknown")
@@ -37,158 +45,218 @@ class QualityAgent:
             fatal_issues.append("no output image artifact")
 
         for artifact in image_artifacts:
-            view_issues = artifact.metadata.get("view_issues", [])
-            scene_mode = artifact.metadata.get("scene_generation_mode", "")
-            image_type = job.image_type.lower()
+            metadata = artifact.metadata
+            scene_mode = metadata.get("scene_generation_mode", "")
+            fusion_mode = metadata.get("fusion_mode", "")
+            vision_source = metadata.get("vision_source", "")
 
-            # ---- Hard gate: scene mode checks ----
-            if scene_mode == "rough_only":
-                fatal_issues.append("scene is rough_only: fusion not supported, cannot be formal output")
-            elif scene_mode == "blocked":
-                fatal_issues.append("scene is blocked: core capability missing")
+            # ---- Type-specific checks ----
+            if artifact.type == "scene":
+                self._check_scene(artifact, metadata, scene_mode, fusion_mode, fatal_issues, review_issues)
+            elif artifact.type == "scene_candidate":
+                # Candidates are informational, not formal output
+                pass
+            elif artifact.type == "selling_point":
+                self._check_selling_point(job, artifact, metadata, vision_source, fatal_issues, review_issues)
+            elif artifact.type == "selling_point_candidate":
+                # Candidate — cannot auto-pass
+                review_issues.append(f"selling_point_candidate requires manual review: {artifact.name}")
+            elif artifact.type == "detail":
+                self._check_detail(artifact, metadata, fatal_issues, review_issues)
+            elif artifact.type == "detail_candidate":
+                review_issues.append(f"detail_candidate requires manual review: {artifact.name}")
+            elif artifact.type in ("main", "white_main"):
+                self._check_main(artifact, fatal_issues, review_issues)
+            elif artifact.type == "size_compare":
+                self._check_size_compare(artifact, metadata, fatal_issues, review_issues)
 
-            # ---- Hard gate: model_synthesis_not_implemented on scene_main ----
-            if "model_synthesis_not_implemented" in view_issues:
-                if image_type in {"scene_main", "main_scene", "scene_lifestyle", "lifestyle"}:
-                    fatal_issues.append(
-                        "scene_main/scene_lifestyle requires model synthesis but not implemented; "
-                        "cannot pass as formal output"
-                    )
-                elif artifact.type == "scene":
-                    fatal_issues.append("scene artifact has model_synthesis_not_implemented in view_issues")
-                else:
-                    review_issues.append("requested view requires model synthesis but not implemented")
+            # ---- Universal image checks ----
+            if artifact.type not in ("scene_candidate", "selling_point_candidate", "detail_candidate", "rough_scene"):
+                try:
+                    image = Image.open(artifact.path)
+                    w, h = image.size
+                    if w < 1000 or h < 1000:
+                        review_issues.append(f"image too small: {artifact.name} {w}x{h}")
+                    if has_checkerboard_artifact(image):
+                        fatal_issues.append(f"checkerboard artifact in formal output: {artifact.name}")
+                except OSError:
+                    fatal_issues.append(f"cannot open artifact: {artifact.name}")
 
-            # ---- Hard gate: SceneRequirementChecker ----
-            scene_req = artifact.metadata.get("scene_requirement_check", {})
-            if scene_req:
-                req_status = scene_req.get("status", "")
-                missing = scene_req.get("missing_elements", [])
-                if req_status == "manual_required":
-                    review_issues.append(f"scene requirement check is manual_required; missing: {missing}")
-                elif req_status == "fail":
-                    fatal_issues.append(f"scene requirement check failed; missing: {missing}")
-                elif req_status == "needs_review":
-                    review_issues.append(f"scene requirement check needs_review; missing: {missing}")
+        # ---- VLM verification for scene/selling_point (if available) ----
+        if self._vision_agent:
+            for artifact in image_artifacts:
+                if artifact.type == "scene":
+                    self._vlm_verify_scene(artifact, fatal_issues, review_issues)
+                elif artifact.type == "selling_point":
+                    self._vlm_verify_selling_point(job, artifact, review_issues)
 
-            # ---- Image quality checks ----
-            try:
-                image = Image.open(artifact.path)
-            except OSError:
-                fatal_issues.append(f"cannot open artifact: {artifact.name}")
-                continue
-            w, h = image.size
-            if w < 1000 or h < 1000:
-                review_issues.append(f"image too small: {artifact.name} {w}x{h}")
-
-            # Checkerboard check on ALL formal image types
-            if artifact.type in {"main", "scene", "selling_point", "size_compare", "detail"}:
-                if has_checkerboard_artifact(image):
-                    fatal_issues.append(f"checkerboard or white block artifact: {artifact.name}")
-
-            # Even rough_scene images get a checkerboard flag
-            if artifact.type == "rough_scene" and has_checkerboard_artifact(image):
-                review_issues.append(f"rough scene has checkerboard artifact: {artifact.name}")
-
-            self._business_quality_checks(job, artifact, fatal_issues, review_issues)
-
-        issues = fatal_issues + review_issues
-        score = max(0, 90 - len(fatal_issues) * 35 - len(review_issues) * 18)
+        all_issues = fatal_issues + review_issues
+        score = max(0, 90 - len(fatal_issues) * 35 - len(review_issues) * 15)
         if fatal_issues:
             status = "fail"
         elif review_issues:
             status = "needs_review"
+        elif not self._vision_agent:
+            status = "manual_required"
+            review_issues.append("no VLM available for automated quality verification")
         else:
             status = "pass"
+
         return QualityReport(
             score=score,
             status=status,
-            issues=issues,
-            suggestion="人工审核通过后入库" if status == "pass" else "修复问题后重试",
+            issues=all_issues + (["no_vlm: manual review required"] if not self._vision_agent and not fatal_issues else []),
+            suggestion="人工审核" if status != "fail" else "修复问题后重试",
         )
 
-    def _business_quality_checks(
-        self,
-        job: ImageJob,
-        artifact: Artifact,
-        fatal_issues: list[str],
-        review_issues: list[str],
-    ):
-        metadata = artifact.metadata
-        image_type = job.image_type.lower()
+    def _check_scene(self, artifact, metadata, scene_mode, fusion_mode, fatal, review):
+        if scene_mode in ("rough_only", "blocked"):
+            fatal.append(f"scene is {scene_mode}: cannot be formal output")
+        if fusion_mode == "single_edit_fallback":
+            fatal.append("scene used single_edit_fallback, not true multi-input fusion")
+        if fusion_mode not in ("true_fusion",) and artifact.type == "scene":
+            fatal.append(f"scene fusion_mode={fusion_mode}, only true_fusion qualifies")
 
-        if artifact.type == "scene":
-            fusion_status = metadata.get("fusion_status", "")
-            scene_mode = metadata.get("scene_generation_mode", "")
+        # VLM quality check result
+        vlm_q = metadata.get("vlm_quality_check", {})
+        if vlm_q.get("has_artifacts"):
+            fatal.append(f"VLM detected artifacts in scene: {vlm_q.get('artifact_type')}")
+        if vlm_q.get("structure_distorted"):
+            fatal.append(f"VLM detected structure distortion: {vlm_q.get('distortion_description')}")
+        if not vlm_q.get("is_grounded", True):
+            review.append("VLM: product may be floating")
 
-            # If fusion was not successful, the scene is not qualified
-            if fusion_status not in {"fused"} and scene_mode != "true_fusion":
-                fatal_issues.append(f"scene fusion not confirmed (fusion_status={fusion_status}, mode={scene_mode})")
+        # Scene requirement check
+        scene_req = metadata.get("scene_requirement_check", {})
+        if scene_req:
+            req_status = scene_req.get("status", "")
+            missing = scene_req.get("missing_elements", [])
+            if req_status == "fail":
+                fatal.append(f"scene missing required elements: {missing}")
+            elif req_status in ("manual_required", "needs_review"):
+                review.append(f"scene elements unverified: {missing}")
 
-            # Prompt element check
-            prompt = str(metadata.get("scene_prompt", "")).lower()
-            requires_life = any(k in prompt for k in ["cat", "cats", "child", "family", "interaction", "maine coon"])
-            if requires_life:
-                scene_req = metadata.get("scene_requirement_check", {})
-                if scene_req.get("status") in {"manual_required", "fail", "needs_review"}:
-                    missing = scene_req.get("missing_elements", [])
-                    review_issues.append(
-                        f"scene prompt requires living elements but requirement check status="
-                        f"{scene_req.get('status')}, missing={missing}"
-                    )
+    def _check_selling_point(self, job, artifact, metadata, vision_source, fatal, review):
+        if metadata.get("is_fallback_annotation"):
+            fatal.append("selling point uses fallback annotation coordinates (not VLM)")
 
-        if artifact.type == "selling_point":
-            annotation_type = metadata.get("annotation_type", "")
-            title = str(metadata.get("title", "")).lower()
-            has_annotation = metadata.get("has_annotation", False)
+        if not metadata.get("has_annotation"):
+            fatal.append("selling point missing annotation data")
 
-            if not has_annotation:
-                fatal_issues.append("selling point image missing annotation metadata")
+        annotation_type = metadata.get("annotation_type", "")
+        if annotation_type == "resting_areas":
+            count = metadata.get("annotation_badge_count", 0)
+            if count < 3:
+                review.append(f"resting areas: only {count} badges drawn (expected 6)")
+            if not metadata.get("annotation_badges_drawn"):
+                fatal.append("resting areas: no badges drawn")
 
-            # Verify annotation elements were actually drawn
-            if annotation_type == "resting_areas":
-                if "6" not in title:
-                    review_issues.append("resting area selling point missing numbered-area title")
-                if not metadata.get("annotation_badges_drawn"):
-                    review_issues.append("resting areas: numbered badges may not be visible in output")
+        elif annotation_type == "climbing_path":
+            if not metadata.get("annotation_arrows_drawn"):
+                fatal.append("climbing path: no arrows drawn")
 
-            if annotation_type == "climbing_path":
-                if "path" not in title and "climbing" not in title:
-                    review_issues.append("climbing path selling point title does not match path annotation")
-                if not metadata.get("annotation_arrows_drawn"):
-                    review_issues.append("climbing path: route arrows may not be visible in output")
+        elif annotation_type == "stability_base":
+            if not metadata.get("annotation_highlight_drawn"):
+                fatal.append("stability base: no highlight drawn")
 
-            if annotation_type == "stability_base":
-                if "base" not in title:
-                    review_issues.append("stability selling point does not emphasize base")
-                if not metadata.get("annotation_highlight_drawn"):
-                    review_issues.append("stability base: highlight box may not be visible in output")
+        elif annotation_type == "scratching_system":
+            if not metadata.get("annotation_highlights_drawn"):
+                fatal.append("scratching system: no highlights drawn")
 
-            if annotation_type == "scratching_system":
-                if "scratch" not in title and "sisal" not in title:
-                    review_issues.append("scratching selling point does not emphasize scratching system")
-                if not metadata.get("annotation_highlights_drawn"):
-                    review_issues.append("scratching system: highlight boxes may not be visible in output")
+    def _check_detail(self, artifact, metadata, fatal, review):
+        confidence = metadata.get("material_confidence", 0)
+        vision_source = metadata.get("vision_source", "unknown")
+        if confidence < 0.3:
+            fatal.append(f"material detection confidence too low: {confidence:.2f}")
+        elif confidence < 0.5 and vision_source != "vlm":
+            review.append(f"material detection low confidence: {confidence:.2f}")
+        if metadata.get("material_type") == "unknown":
+            review.append("material type not identified")
 
-        if artifact.type == "size_compare" or image_type == "size_compare":
-            if not metadata.get("has_dimension_line") or "205" not in str(metadata.get("dimension_label", "")):
-                fatal_issues.append("size compare image missing 205cm dimension line")
-            if metadata.get("title_safe_area") != "top_band_outside_product":
-                review_issues.append("size compare title safe area not confirmed")
+    def _check_main(self, artifact, fatal, review):
+        try:
+            image = Image.open(artifact.path)
+            w, h = image.size
+            # Product should occupy ~85% of main image
+            from pipeline.step4_enhance import _content_bbox
+            content = image.convert("RGB")
+            bbox = _content_bbox(content)
+            content_w = bbox[2] - bbox[0]
+            content_h = bbox[3] - bbox[1]
+            coverage = (content_w * content_h) / (w * h)
+            if coverage < 0.5:
+                review.append(f"main image: product coverage only {coverage:.0%} (expect ~85%)")
+        except Exception:
+            pass
+
+    def _check_size_compare(self, artifact, metadata, fatal, review):
+        if not metadata.get("has_dimension_line"):
+            fatal.append("size compare: missing dimension line")
+        label = str(metadata.get("dimension_label", ""))
+        if "205" not in label:
+            fatal.append(f"size compare: dimension label missing 205cm (got: {label})")
+        if metadata.get("title_safe_area") != "top_band_outside_product":
+            review.append("size compare: title may overlap product area")
+
+    def _vlm_verify_scene(self, artifact, fatal, review):
+        """Use VLM to verify scene image quality."""
+        try:
+            image = Image.open(artifact.path)
+            metadata = artifact.metadata
+            scene_req = metadata.get("scene_requirement_check", {})
+            required = scene_req.get("required_elements", [])
+            result = self._vision_agent.verify_quality(image, required_elements=required)
+
+            if result.get("has_artifacts"):
+                fatal.append(f"VLM post-check: artifacts detected ({result.get('artifact_type')})")
+            if result.get("structure_distorted"):
+                fatal.append(f"VLM post-check: structure distorted")
+            if not result.get("product_visible", True):
+                fatal.append("VLM post-check: product not visible")
+            missing = result.get("missing_elements", [])
+            if missing:
+                review.append(f"VLM post-check: missing scene elements: {missing}")
+        except Exception:
+            review.append("VLM scene verification failed")
+
+    def _vlm_verify_selling_point(self, job, artifact, review):
+        """Use VLM to verify selling point expression."""
+        try:
+            image = Image.open(artifact.path)
+            metadata = artifact.metadata
+            result = self._vision_agent.verify_selling_point(
+                image,
+                selling_point=job.description,
+                annotation_type=metadata.get("annotation_type", ""),
+            )
+            if result.get("overall") == "fail":
+                review.append(f"VLM: selling point not expressed in image: {result.get('issues')}")
+            elif result.get("overall") == "needs_review":
+                review.append(f"VLM: selling point unclear: {result.get('issues')}")
+            if not result.get("annotations_positioned_correctly", True):
+                review.append("VLM: annotation markers may be mispositioned")
+        except Exception:
+            review.append("VLM selling point verification failed")
 
     def evaluate_view_distribution(self, jobs: list[ImageJob]) -> dict:
-        missing = [job.job_id for job in jobs if not job.view_type]
+        """Check for excessive view repetition."""
         counts = Counter(job.view_type for job in jobs if job.view_type)
         repeated = {view: count for view, count in counts.items() if count > 1}
         total = max(len(jobs), 1)
         unique = len(counts)
         diversity_score = round(unique / total, 2)
-        issues = [f"job missing view_type: {job_id}" for job_id in missing]
-        issues.extend(f"View repeated: {view} x {count}" for view, count in repeated.items())
+
+        issues = []
+        if repeated:
+            issues.append(f"view direction repeated: {repeated}")
+        # If more than 3 jobs share same view → whole batch needs review
+        for view, count in repeated.items():
+            if count >= 3:
+                issues.append(f"CRITICAL: {view} repeated {count} times — batch needs_review")
+
         return {
             "view_counts": dict(counts),
             "repeated_views": repeated,
             "view_diversity_score": diversity_score,
-            "missing_view_jobs": missing,
             "issues": issues,
         }

@@ -228,38 +228,90 @@ def has_checkerboard_artifact(image: Image.Image) -> bool:
     return neutral_ratio > 0.40 and light_ratio > 0.16 and mid_ratio > 0.08 and alternating_ratio > 0.30
 
 
-def multi_input_fusion_adapter(
+def _gemini_multimodal_fusion(
     background: Image.Image,
     product_subject: Image.Image,
+    product_mask: Image.Image | None,
+    scene_prompt: str,
+) -> tuple[Image.Image | None, list[str]]:
+    """
+    True multi-input fusion via Gemini multimodal generate_content.
+    Sends background + product + mask as separate image parts.
+    """
+    import io
+    import config
+
+    if not getattr(config, 'GOOGLE_API_KEY', ''):
+        return None, ["gemini_api_key_not_configured"]
+
+    try:
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client(api_key=config.GOOGLE_API_KEY)
+
+        # Prepare image parts
+        def img_to_part(img: Image.Image, label: str) -> list:
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            return [
+                types.Part.from_text(text=f"[{label}]"),
+                types.Part.from_bytes(data=buf.getvalue(), mime_type="image/png"),
+            ]
+
+        parts = []
+        parts.extend(img_to_part(background, "BACKGROUND - empty room scene"))
+        parts.extend(img_to_part(product_subject, "PRODUCT - cat tree tower to place in scene"))
+        if product_mask:
+            parts.extend(img_to_part(product_mask, "PRODUCT MASK - white=product, black=background"))
+
+        fusion_prompt = (
+            f"{scene_prompt}\n\n"
+            "TASK: Fuse the PRODUCT into the BACKGROUND scene to create a photorealistic e-commerce image.\n"
+            "RULES:\n"
+            "1. Place the product naturally in the room — it must stand on the floor with contact shadows.\n"
+            "2. Keep the product structure, color, platform count and proportions EXACTLY as shown.\n"
+            "3. Match lighting direction and color temperature to the room.\n"
+            "4. Add natural shadows under the base.\n"
+            "5. The product must NOT float, must NOT have checkerboard artifacts.\n"
+            "6. If cats, children, or family interaction are requested in the scene prompt, include them.\n"
+            "7. Do NOT alter the product structure. Do NOT replace with a different cat tree.\n"
+            "8. Make it look like a professional commercial photograph."
+        )
+        parts.append(types.Part.from_text(text=fusion_prompt))
+
+        console.print(f"  [Gemini] 多图融合: background + product + mask → scene")
+        response = client.models.generate_content(
+            model="gemini-2.0-flash-preview-image-generation",
+            contents=[types.Content(parts=parts)],
+            config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+        )
+
+        images = []
+        for part in response.candidates[0].content.parts:
+            if part.inline_data and part.inline_data.mime_type.startswith("image/"):
+                img = Image.open(io.BytesIO(part.inline_data.data))
+                images.append(img)
+
+        if images:
+            fused = images[0].convert("RGB")
+            issues = []
+            if has_checkerboard_artifact(fused):
+                issues.append("gemini_fusion_checkerboard_artifact")
+            console.print(f"  ✅ Gemini 多图融合成功")
+            return fused, issues
+        return None, ["gemini_fusion_returned_no_image"]
+
+    except Exception as exc:
+        return None, [f"gemini_fusion_failed: {exc}"]
+
+
+def _gpt_single_edit_fusion(
     rough_composite: Image.Image,
     scene_prompt: str,
     model: str = "gpt-image-2",
-) -> tuple[Image.Image | None, str, list[str]]:
-    """
-    Attempt true multi-input fusion (background + product + rough).
-
-    Returns
-    -------
-    (fused_image_or_None, fusion_mode, issues)
-        fusion_mode: "true_fusion" | "single_edit_fallback" | "fusion_not_supported"
-    """
-    # -----------------------------------------------------------------
-    # Probe: does the current model SDK support multi-image input?
-    # gpt-image-2 /v1/images/edits accepts a single image + prompt.
-    # Gemini multimodal can accept multiple images but through
-    # generate_content, not an edit endpoint.
-    # Until the SDK supports genuine multi-image fusion, we report
-    # fusion_not_supported instead of silently discarding inputs.
-    # -----------------------------------------------------------------
-    supports_multi_input = False  # hardcoded until SDK upgrade
-
-    if supports_multi_input:
-        # ---- True multi-input path (placeholder for future SDK) ----
-        # fused = true_multi_fusion(background, product_subject, rough_composite, ...)
-        # return fused, "true_fusion", []
-        pass
-
-    # ---- Single-edit fallback: refine the rough composite ----
+) -> tuple[Image.Image | None, list[str]]:
+    """Single-image edit fallback via GPT image edit."""
     prompt = (
         f"{scene_prompt}\n\n"
         "Edit this rough ecommerce composite into a realistic final scene. "
@@ -268,7 +320,7 @@ def multi_input_fusion_adapter(
         "Blend the product naturally into the living room with correct perspective. "
         "The product must stand on the floor and must not float. "
         "Add natural contact shadows under the base and match lighting direction to the room. "
-        "If cats, child, family interaction or multi-cat usage are requested, include them naturally in the scene. "
+        "If cats, child, family interaction or multi-cat usage are requested, include them naturally. "
         "Do not replace the product with a different cat tree."
     )
     try:
@@ -279,19 +331,65 @@ def multi_input_fusion_adapter(
             size="1536x1024",
             quality="high",
         )
-    except Exception as exc:  # pragma: no cover - network/model failures
-        return None, "fusion_not_supported", [f"single_edit_failed: {exc}"]
+    except Exception as exc:
+        return None, [f"single_edit_failed: {exc}"]
 
     if not results:
-        return None, "fusion_not_supported", ["single_edit_returned_no_image"]
+        return None, ["single_edit_returned_no_image"]
 
     refined = results[0].convert("RGB")
-    issues: list[str] = ["fusion_not_supported"]
+    issues: list[str] = []
     if has_checkerboard_artifact(refined):
-        issues.append("image_edit_fusion_checkerboard_artifact")
-    # The refined image is better than raw rough, but it is NOT a true
-    # multi-input fusion.  The caller must treat it as rough_only.
-    return refined, "fusion_not_supported", issues
+        issues.append("single_edit_checkerboard_artifact")
+    return refined, issues
+
+
+def generate_product_mask(transparent_image: Image.Image) -> Image.Image:
+    """Generate a binary mask from a transparent (RGBA) product image."""
+    if transparent_image.mode != "RGBA":
+        # If no alpha, create full-white mask
+        return Image.new("L", transparent_image.size, 255)
+    alpha = transparent_image.split()[-1]
+    return alpha.point(lambda p: 255 if p > 30 else 0)
+
+
+def multi_input_fusion_adapter(
+    background: Image.Image,
+    product_subject: Image.Image,
+    rough_composite: Image.Image,
+    scene_prompt: str,
+    model: str = "gpt-image-2",
+    product_mask: Image.Image | None = None,
+) -> tuple[Image.Image | None, str, list[str]]:
+    """
+    Attempt true multi-input fusion.
+
+    Strategy:
+    1. Try Gemini multimodal (background + product + mask → fused scene) — TRUE FUSION
+    2. Fall back to GPT single-image edit on rough composite — NOT TRUE FUSION
+    3. If both fail, return None
+
+    Returns (fused_image_or_None, fusion_mode, issues)
+    """
+    # ---- Path 1: Gemini multimodal true fusion ----
+    console.print("  [Fusion] 尝试 Gemini 多图真融合...")
+    fused, issues = _gemini_multimodal_fusion(
+        background, product_subject, product_mask, scene_prompt,
+    )
+    if fused is not None:
+        return fused, "true_fusion", issues
+
+    console.print(f"  [Fusion] Gemini 融合不可用: {issues}，尝试 GPT 单图编辑...", style="yellow")
+
+    # ---- Path 2: GPT single-edit on rough composite ----
+    fused, edit_issues = _gpt_single_edit_fusion(rough_composite, scene_prompt, model)
+    all_issues = issues + edit_issues
+    if fused is not None:
+        # Single-edit succeeded but is NOT true fusion
+        return fused, "single_edit_fallback", all_issues + ["not_true_fusion"]
+
+    # ---- Both failed ----
+    return None, "fusion_not_supported", all_issues
 
 
 def image_edit_fusion(
@@ -300,16 +398,17 @@ def image_edit_fusion(
     rough_composite: Image.Image,
     scene_prompt: str,
     model: str = "gpt-image-2",
+    product_mask: Image.Image | None = None,
 ) -> tuple[Image.Image, list[str], str]:
     """
     Fuse a rough product composite into the scene.
 
     Returns (image, issues, fusion_mode).
-    fusion_mode is one of: "true_fusion", "fusion_not_supported".
+    fusion_mode: "true_fusion" | "single_edit_fallback" | "fusion_not_supported"
 
-    When fusion_not_supported, the returned image is a refined rough
-    composite — NOT a production-grade fused scene.  The workflow must
-    NOT output it as a formal scene image.
+    Only "true_fusion" qualifies for formal scene output.
+    "single_edit_fallback" produces a candidate image but cannot be formal output.
+    "fusion_not_supported" means no image was generated.
     """
     fused, mode, issues = multi_input_fusion_adapter(
         background=background,
@@ -317,6 +416,7 @@ def image_edit_fusion(
         rough_composite=rough_composite,
         scene_prompt=scene_prompt,
         model=model,
+        product_mask=product_mask,
     )
     if fused is None:
         return rough_composite, issues, mode
