@@ -251,9 +251,20 @@ async def create_task(
     product_id: str = Form(...),
     model: str = Form("gpt-image-2"),
     scene_count: int = Form(3),
+    mode: str = Form("explore"),
 ):
-    """创建生图任务"""
-    return _create_generation_task(product_id=product_id, model=model, scene_count=scene_count)
+    """创建生图任务（支持 explore / batch 模式）"""
+    return _create_generation_task(product_id=product_id, model=model, scene_count=scene_count, mode=mode)
+
+
+@app.post("/api/explore-tasks")
+async def create_explore_task(
+    product_id: str = Form(...),
+    model: str = Form("gpt-image-2"),
+):
+    """创建 Explore 候选生成任务"""
+    return _create_generation_task(product_id=product_id, model=model, mode="explore")
+
 
 
 @app.get("/api/creative/tasks")
@@ -393,7 +404,7 @@ async def create_rule(body: KnowledgeRuleCreate):
     return rule.model_dump()
 
 
-def _create_generation_task(product_id: str, model: str = "gpt-image-2", scene_count: int = 3):
+def _create_generation_task(product_id: str, model: str = "gpt-image-2", scene_count: int = 3, mode: str = "explore"):
     """创建并启动生图任务，可由 API 或 Agent Run 复用。"""
     # 检查产品配置
     prod_path = PRODUCTS_DIR / f"{product_id.lower()}.json"
@@ -425,12 +436,13 @@ def _create_generation_task(product_id: str, model: str = "gpt-image-2", scene_c
     tasks[task_id]["model"] = model
     tasks[task_id]["scene_count"] = scene_count
     tasks[task_id]["image_path"] = str(img_path)
+    tasks[task_id]["mode"] = mode
 
     # 后台执行 Pipeline
     import threading
     threading.Thread(target=_run_task_real, args=(task_id,), daemon=True).start()
 
-    return {"task_id": task_id, "status": "created"}
+    return {"task_id": task_id, "status": "created", "mode": mode}
 
 
 def _update_task(task_id: str, **kwargs):
@@ -446,44 +458,87 @@ def _run_task_real(task_id: str):
     product_id = task["product_id"]
     model = task.get("model", "gpt-image-2")
     img_path = Path(task["image_path"])
+    mode = task.get("mode", "explore")
     generated_images: list[dict] = []
 
     try:
-        from core.services.generation_service import GenerationService
-
         def progress(message: str, value: int):
             _update_task(task_id, status="running", current_step=message, progress=value)
 
-        result = GenerationService().execute_run(
-            product_id=product_id,
-            product_image_path=img_path,
-            model=model,
-            run_id=f"task_{task_id}",
-            progress=progress,
-        )
-        out_dir = Path(result["output_dir"])
-        for artifact in result["artifacts"]:
-            path = Path(artifact["path"])
-            if path.suffix.lower() != ".png":
-                continue
-            generated_images.append({
-                "name": artifact["name"],
-                "filename": path.name,
-                "type": artifact["type"],
-                "job_id": artifact.get("job_id"),
-                "metadata": artifact.get("metadata", {}),
-            })
+        if mode == "explore":
+            from core.services.explore_generation_service import ExploreGenerationService
 
-        _update_task(task_id,
-            status="done",
-            current_step="完成",
-            progress=100,
-            output_dir=str(out_dir),
-            images=generated_images,
-            jobs=result["jobs"],
-            traces=result["traces"],
-            creative_version=result.get("creative_version"),
-        )
+            result = ExploreGenerationService().execute_explore(
+                product_id=product_id,
+                product_image_path=img_path,
+                model=model,
+                run_id=f"task_{task_id}",
+                progress=progress,
+            )
+            explore_dir = Path(result.get("explore_dir", ""))
+
+            # Collect candidate images
+            for type_key, candidates in result.get("candidates", {}).items():
+                for cand in candidates:
+                    cand_path = cand.get("image_path", "")
+                    if cand_path and Path(cand_path).exists():
+                        generated_images.append({
+                            "name": Path(cand_path).name,
+                            "filename": Path(cand_path).name,
+                            "type": f"candidate_{type_key}",
+                            "candidate_id": cand.get("candidate_id"),
+                            "status": cand.get("status"),
+                            "strategy": cand.get("generation_strategy"),
+                        })
+
+            _update_task(task_id,
+                status="done",
+                current_step="Explore 完成",
+                progress=100,
+                output_dir=str(explore_dir.parent) if explore_dir.exists() else "",
+                explore_dir=str(explore_dir),
+                images=generated_images,
+                qa_summary=result.get("qa_summary", {}),
+                creative_briefs=[b for b in result.get("creative_briefs", [])],
+                traces=result.get("traces", []),
+                mode="explore",
+            )
+
+        else:
+            # batch mode — original GenerationService
+            from core.services.generation_service import GenerationService
+
+            result = GenerationService().execute_run(
+                product_id=product_id,
+                product_image_path=img_path,
+                model=model,
+                run_id=f"task_{task_id}",
+                progress=progress,
+            )
+            out_dir = Path(result["output_dir"])
+            for artifact in result["artifacts"]:
+                path = Path(artifact["path"])
+                if path.suffix.lower() != ".png":
+                    continue
+                generated_images.append({
+                    "name": artifact["name"],
+                    "filename": path.name,
+                    "type": artifact["type"],
+                    "job_id": artifact.get("job_id"),
+                    "metadata": artifact.get("metadata", {}),
+                })
+
+            _update_task(task_id,
+                status="done",
+                current_step="完成",
+                progress=100,
+                output_dir=str(out_dir),
+                images=generated_images,
+                jobs=result["jobs"],
+                traces=result["traces"],
+                creative_version=result.get("creative_version"),
+                mode="batch",
+            )
 
     except Exception as e:
         traceback.print_exc()
@@ -821,11 +876,88 @@ async def get_task_image(task_id: str, filename: str):
     if not out_dir:
         raise HTTPException(404, "任务无输出")
 
+    # Try direct path first
     img_path = Path(out_dir) / filename
-    if not img_path.exists():
-        raise HTTPException(404, "图片不存在")
+    if img_path.exists():
+        return FileResponse(img_path)
 
-    return FileResponse(img_path)
+    # Try explore subdirectories
+    explore_dir = task.get("explore_dir", "")
+    if explore_dir:
+        # Search in explore/{type_dir}/{filename}
+        for type_dir in Path(explore_dir).iterdir():
+            if type_dir.is_dir():
+                candidate_path = type_dir / filename
+                if candidate_path.exists():
+                    return FileResponse(candidate_path)
+
+    raise HTTPException(404, "图片不存在")
+
+
+@app.get("/api/tasks/{task_id}/explore")
+async def get_explore_results(task_id: str):
+    """获取 Explore 模式的候选图和 QA 结果"""
+    if task_id not in tasks:
+        raise HTTPException(404, "任务不存在")
+
+    task = tasks[task_id]
+    if task.get("mode") != "explore":
+        raise HTTPException(400, "该任务不是 explore 模式")
+
+    explore_dir = task.get("explore_dir", "")
+    if not explore_dir or not Path(explore_dir).exists():
+        raise HTTPException(404, "Explore 输出不存在")
+
+    explore_path = Path(explore_dir)
+    result = {
+        "task_id": task_id,
+        "status": task.get("status"),
+        "qa_summary": task.get("qa_summary", {}),
+        "creative_briefs": task.get("creative_briefs", []),
+        "candidates": {},
+    }
+
+    # Load QA summary from file if not in task
+    qa_file = explore_path / "qa_summary.json"
+    if qa_file.exists() and not result["qa_summary"]:
+        with open(qa_file, "r", encoding="utf-8") as f:
+            result["qa_summary"] = json.load(f)
+
+    # List candidates per type
+    for type_dir in sorted(explore_path.iterdir()):
+        if type_dir.is_dir():
+            type_key = type_dir.name
+            candidates = []
+            for img_file in sorted(type_dir.glob("*.png")):
+                cand = {
+                    "filename": img_file.name,
+                    "image_url": f"/api/tasks/{task_id}/images/{img_file.name}",
+                }
+                # Load QA score
+                qa_path = type_dir / f"{img_file.stem}_qa.json"
+                if qa_path.exists():
+                    with open(qa_path, "r", encoding="utf-8") as f:
+                        cand["qa"] = json.load(f)
+                # Load candidate metadata
+                meta_path = type_dir / f"{img_file.stem}.json"
+                if meta_path.exists():
+                    with open(meta_path, "r", encoding="utf-8") as f:
+                        cand["metadata"] = json.load(f)
+                candidates.append(cand)
+
+            # Load recommendation
+            rec_path = type_dir / "recommendation.json"
+            recommendation = None
+            if rec_path.exists():
+                with open(rec_path, "r", encoding="utf-8") as f:
+                    recommendation = json.load(f)
+
+            result["candidates"][type_key] = {
+                "candidates": candidates,
+                "recommendation": recommendation,
+            }
+
+    return result
 
 
 @app.get("/api/models")
