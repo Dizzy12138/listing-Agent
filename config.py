@@ -13,6 +13,21 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
 
+# Auto-load settings.json if present (for CLI runs)
+_settings_path = Path(__file__).parent / "settings.json"
+if _settings_path.exists():
+    import json as _json
+    with open(_settings_path, "r", encoding="utf-8") as _f:
+        _saved = _json.load(_f)
+    _keys = _saved.get("api_keys", {})
+    if _keys.get("openai_api_key"):
+        OPENAI_API_KEY = _keys["openai_api_key"]
+    if _keys.get("openai_base_url"):
+        OPENAI_BASE_URL = _keys["openai_base_url"]
+    if _keys.get("google_api_key"):
+        GOOGLE_API_KEY = _keys["google_api_key"]
+
+
 # --- Directories ---
 BASE_DIR = Path(__file__).parent
 OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "./output"))

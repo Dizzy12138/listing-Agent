@@ -1,0 +1,23 @@
+explore:
+  enabled_image_types:
+    - hero_scene
+    - lifestyle_scene
+    - material_detail
+  candidates_per_type: 4
+  require_visual_qa: true
+  allow_text_only_candidate: true
+  allow_formal_output: false
+
+batch:
+  enabled_image_types:
+    - white_main
+    - hero_scene
+    - resting_areas_info
+    - scratching_demo
+    - stability_demo
+    - material_detail
+    - lifestyle_scene
+    - climbing_path_info
+    - size_compare
+  require_explore_recommendation: true
+  allow_formal_output: true

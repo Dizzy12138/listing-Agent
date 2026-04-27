@@ -95,9 +95,8 @@ def edit_image(
         "n": 1,
     }
 
-    # quality 参数
-    if quality:
-        kwargs["quality"] = quality
+    # quality 参数 — some gateways don't support quality for edits
+    # Try without quality to avoid 400 errors
 
     result = client.images.edit(**kwargs)
 
