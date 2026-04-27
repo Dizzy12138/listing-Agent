@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from config import OUTPUT_DIR, PRODUCTS_DIR
 from agents.visual_runtime import VisualAgentRuntime
+from core.services.creative_service import CreativeService
 
 app = FastAPI(title="电商批量生图平台", version="1.0.0")
 
@@ -26,6 +27,7 @@ app.mount("/products", StaticFiles(directory="products"), name="products")
 # 任务存储 (PoC 阶段用内存，后续可换 Redis/DB)
 tasks: dict = {}
 agent_runtime = VisualAgentRuntime(PRODUCTS_DIR, OUTPUT_DIR)
+creative_service = CreativeService(output_dir=OUTPUT_DIR)
 
 
 # --- Models ---
@@ -63,6 +65,58 @@ class AgentRunCreate(BaseModel):
 
 class AgentRunAnswers(BaseModel):
     answers: dict[str, str] = {}
+
+
+class ReviewCreate(BaseModel):
+    version_id: str
+    asset_id: str | None = None
+    reviewer: str = ""
+    decision: str = "needs_revision"
+    tags: list[str] = []
+    comment: str = ""
+
+
+class CreativeTaskCreate(BaseModel):
+    sku_id: str
+    objective: str = "提升 Amazon Listing CTR/CVR"
+    marketplace: str = "US"
+    target_metrics: list[str] = []
+
+
+class TemplateVersionCreate(BaseModel):
+    sku_id: str
+    asset_type: str = "dimension_infographic"
+    title: str = "205cm XXL Cat Tree Tower"
+    subtitle: str = "Editable layered template output"
+    marketplace: str = "US"
+
+
+class ExperimentCreate(BaseModel):
+    sku_id: str
+    objective: str
+    marketplace: str = "US"
+    control_version_id: str | None = None
+    treatment_version_ids: list[str] = []
+    external_variables: dict = {}
+
+
+class MetricCreate(BaseModel):
+    version_id: str
+    metric_name: str
+    value: float
+    experiment_id: str | None = None
+    sample_size: int | None = None
+    confidence: float | None = None
+    window: dict = {}
+
+
+class KnowledgeRuleCreate(BaseModel):
+    scope: str
+    rule_type: str
+    statement: str
+    evidence: list[dict] = []
+    confidence: float = 0
+    status: str = "candidate"
 
 
 # --- Routes ---
@@ -202,6 +256,143 @@ async def create_task(
     return _create_generation_task(product_id=product_id, model=model, scene_count=scene_count)
 
 
+@app.get("/api/creative/tasks")
+async def list_creative_tasks():
+    return {"tasks": creative_service.list_tasks()}
+
+
+@app.post("/api/creative/tasks")
+async def create_creative_task(body: CreativeTaskCreate):
+    product = _load_product_config(body.sku_id)
+    brief = creative_service.reverse_strategy_brief(
+        product,
+        objective=body.objective,
+        marketplace=body.marketplace,
+    )
+    task = creative_service.create_task(
+        sku_id=body.sku_id,
+        objective=body.objective,
+        marketplace=body.marketplace,
+        target_metrics=body.target_metrics or [brief["primary_goal"]],
+        strategy_brief=brief,
+    )
+    return {"task": task.model_dump(), "strategy_brief": brief}
+
+
+@app.get("/api/creative/strategy/{sku_id}")
+async def reverse_creative_strategy(sku_id: str, objective: str = "提升 Amazon Listing CTR/CVR", marketplace: str = "US"):
+    product = _load_product_config(sku_id)
+    return creative_service.reverse_strategy_brief(product, objective=objective, marketplace=marketplace)
+
+
+@app.get("/api/creative/versions")
+async def list_creative_versions():
+    return {"versions": creative_service.list_versions()}
+
+
+@app.post("/api/creative/template-version")
+async def create_template_version(body: TemplateVersionCreate):
+    image_url = _find_product_image(body.sku_id)
+    if not image_url:
+        raise HTTPException(400, "请先上传产品图片")
+    source_path = Path("products") / image_url.replace("/products/", "")
+    version = creative_service.create_template_version(
+        sku_id=body.sku_id,
+        source_image_path=str(source_path),
+        asset_type=body.asset_type,
+        title=body.title,
+        subtitle=body.subtitle,
+        marketplace=body.marketplace,
+    )
+    return {"version": version.model_dump()}
+
+
+@app.get("/api/creative/versions/{version_id}")
+async def get_creative_version(version_id: str):
+    version = creative_service.get_version(version_id)
+    if not version:
+        raise HTTPException(404, "Creative Version 不存在")
+    return version
+
+
+@app.get("/api/creative/assets")
+async def list_layered_assets():
+    return {"assets": creative_service.list_assets()}
+
+
+@app.get("/api/creative/reviews")
+async def list_review_records():
+    return {"reviews": creative_service.list_reviews()}
+
+
+@app.post("/api/creative/reviews")
+async def create_review_record(body: ReviewCreate):
+    review = creative_service.add_review(
+        version_id=body.version_id,
+        asset_id=body.asset_id,
+        reviewer=body.reviewer,
+        decision=body.decision,
+        tags=body.tags,
+        comment=body.comment,
+    )
+    return review.model_dump()
+
+
+@app.get("/api/creative/experiments")
+async def list_experiments():
+    return {"experiments": creative_service.list_experiments()}
+
+
+@app.post("/api/creative/experiments")
+async def create_experiment(body: ExperimentCreate):
+    experiment = creative_service.create_experiment(
+        sku_id=body.sku_id,
+        objective=body.objective,
+        marketplace=body.marketplace,
+        control_version_id=body.control_version_id,
+        treatment_version_ids=body.treatment_version_ids,
+        external_variables=body.external_variables,
+    )
+    return experiment.model_dump()
+
+
+@app.get("/api/creative/metrics")
+async def list_metrics():
+    return {"metrics": creative_service.list_metrics()}
+
+
+@app.post("/api/creative/metrics")
+async def create_metric(body: MetricCreate):
+    metric = creative_service.add_metric(
+        version_id=body.version_id,
+        metric_name=body.metric_name,
+        value=body.value,
+        experiment_id=body.experiment_id,
+        sample_size=body.sample_size,
+        confidence=body.confidence,
+        window=body.window,
+    )
+    return metric.model_dump()
+
+
+@app.get("/api/creative/rules")
+async def list_rules():
+    return {"rules": creative_service.list_rules()}
+
+
+@app.post("/api/creative/rules")
+async def create_rule(body: KnowledgeRuleCreate):
+    rule = creative_service.create_knowledge_rule(
+        scope=body.scope,
+        rule_type=body.rule_type,
+        statement=body.statement,
+        evidence=body.evidence,
+        confidence=body.confidence,
+        status=body.status,
+    )
+    return rule.model_dump()
+
+
 def _create_generation_task(product_id: str, model: str = "gpt-image-2", scene_count: int = 3):
     """创建并启动生图任务，可由 API 或 Agent Run 复用。"""
     # 检查产品配置
@@ -291,6 +482,7 @@ def _run_task_real(task_id: str):
             images=generated_images,
             jobs=result["jobs"],
             traces=result["traces"],
+            creative_version=result.get("creative_version"),
         )
 
     except Exception as e:
@@ -319,6 +511,14 @@ def _load_products() -> list[dict]:
         with open(f, "r", encoding="utf-8") as fh:
             products.append(json.load(fh))
     return products
+
+
+def _load_product_config(product_id: str) -> dict:
+    path = PRODUCTS_DIR / f"{product_id.lower()}.json"
+    if not path.exists():
+        raise HTTPException(404, "产品配置不存在")
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
 def _find_product_image(product_id: str) -> str:

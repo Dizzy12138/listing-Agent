@@ -14,6 +14,7 @@ let reviewList = [];
 let agentBlueprint = null;
 let agentRuns = [];
 let selectedAgentRun = null;
+let creativeState = { tasks: [], versions: [], assets: [], reviews: [], experiments: [], metrics: [], rules: [], strategy: null };
 
 // === Init ===
 document.addEventListener('DOMContentLoaded', () => {
@@ -25,6 +26,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadWorkflows();
     loadAgents();
     loadAgentWorkbench();
+    loadCreativeOS();
     loadReviews();
     loadSettings();
     setupDragDrop();
@@ -39,6 +41,7 @@ function showPage(page) {
     const pageLabels = {
         dashboard: '数据看板',
         'agent-workbench': 'Agent工作台',
+        'creative-os': '创意闭环',
         products: 'SKU',
         assets: '图片资产',
         workflows: '工作流',
@@ -53,6 +56,7 @@ function showPage(page) {
 
     if (page === 'products') loadProducts();
     if (page === 'agent-workbench') loadAgentWorkbench();
+    if (page === 'creative-os') loadCreativeOS();
     if (page === 'assets') loadAssets();
     if (page === 'workflows') loadWorkflows();
     if (page === 'agents') loadAgents();
@@ -60,6 +64,124 @@ function showPage(page) {
     if (page === 'review') loadReviews();
     if (page === 'dashboard') loadDashboard();
     if (page === 'settings') loadSettings();
+}
+
+// === Creative OS ===
+async function loadCreativeOS() {
+    try {
+        const [tasks, versions, assets, reviews, experiments, metrics, rules] = await Promise.all([
+            api('/api/creative/tasks'),
+            api('/api/creative/versions'),
+            api('/api/creative/assets'),
+            api('/api/creative/reviews'),
+            api('/api/creative/experiments'),
+            api('/api/creative/metrics'),
+            api('/api/creative/rules'),
+        ]);
+        creativeState.tasks = tasks.tasks || [];
+        creativeState.versions = versions.versions || [];
+        creativeState.assets = assets.assets || [];
+        creativeState.reviews = reviews.reviews || [];
+        creativeState.experiments = experiments.experiments || [];
+        creativeState.metrics = metrics.metrics || [];
+        creativeState.rules = rules.rules || [];
+        renderCreativeOS();
+    } catch (e) { /* handled */ }
+}
+
+async function createCreativeTaskFromFirstSku() {
+    if (!products.length) await loadProducts();
+    const sku = products[0]?.product_id;
+    if (!sku) return showToast('请先创建 SKU', 'error');
+    const data = await api('/api/creative/tasks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sku_id: sku, objective: '提升 Amazon Listing CTR/CVR 并降低退货', target_metrics: ['CTR', 'CVR', 'return_rate'] }),
+    });
+    creativeState.strategy = data.strategy_brief;
+    showToast('策略 Brief 已生成', 'success');
+    await loadCreativeOS();
+    renderCreativeOS();
+}
+
+async function createTemplateVersionFromFirstSku() {
+    if (!products.length) await loadProducts();
+    const sku = products[0]?.product_id;
+    if (!sku) return showToast('请先创建 SKU', 'error');
+    await api('/api/creative/template-version', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            sku_id: sku,
+            asset_type: 'dimension_infographic',
+            title: '205cm XXL Cat Tree Tower',
+            subtitle: 'Editable dimensions, text and product layers',
+        }),
+    });
+    showToast('分层模板资产已生成', 'success');
+    await loadCreativeOS();
+}
+
+function renderCreativeOS() {
+    const strategyEl = document.getElementById('creativeStrategyPanel');
+    const versionEl = document.getElementById('creativeVersionPanel');
+    const reviewEl = document.getElementById('creativeReviewPanel');
+    const learningEl = document.getElementById('creativeLearningPanel');
+    if (strategyEl) {
+        const task = creativeState.tasks[0];
+        const brief = creativeState.strategy || task?.strategy_brief;
+        strategyEl.innerHTML = brief ? `
+            <div class="creative-summary">
+                <strong>${brief.sku_id || task?.sku_id || '-'}</strong>
+                <span>${brief.objective || task?.objective || '-'}</span>
+                <em>Primary: ${brief.primary_goal || '-'}</em>
+            </div>
+            <div class="factor-list">${(brief.creative_factors || []).map(f => `
+                <div class="factor-item">
+                    <b>${f.factor_id}</b>
+                    <span>${f.hypothesis}</span>
+                    <em>${f.target_metric}</em>
+                </div>
+            `).join('')}</div>
+            <pre class="compact-json">${escapeHtml(JSON.stringify(brief.prompt_brief || {}, null, 2))}</pre>
+        ` : '<div class="empty-state compact-empty"><h3>暂无策略</h3><p>点击生成策略 Brief。</p></div>';
+    }
+    if (versionEl) {
+        versionEl.innerHTML = creativeState.versions.length ? creativeState.versions.slice(0, 6).map(v => `
+            <div class="version-item">
+                <div>
+                    <strong>${v.version_name}</strong>
+                    <span>${v.version_id} · ${v.sku_id}</span>
+                </div>
+                <em>${(v.asset_ids || []).length} assets</em>
+            </div>
+        `).join('') : '<div class="empty-state compact-empty"><h3>暂无版本</h3><p>生成模板资产或运行生图任务后会出现。</p></div>';
+    }
+    if (reviewEl) {
+        reviewEl.innerHTML = creativeState.reviews.length ? creativeState.reviews.slice(0, 8).map(r => `
+            <div class="review-mini">
+                <strong>${r.decision}</strong>
+                <span>${(r.tags || []).join(' / ') || '无标签'}</span>
+                <em>${r.comment || ''}</em>
+            </div>
+        `).join('') : '<div class="empty-state compact-empty"><h3>暂无审核反馈</h3><p>后续人工审核标签会回流到这里。</p></div>';
+    }
+    if (learningEl) {
+        learningEl.innerHTML = `
+            <div class="learning-stats">
+                <div><strong>${creativeState.experiments.length}</strong><span>实验</span></div>
+                <div><strong>${creativeState.metrics.length}</strong><span>指标</span></div>
+                <div><strong>${creativeState.rules.length}</strong><span>规则</span></div>
+            </div>
+            <div class="factor-list">${creativeState.rules.slice(0, 5).map(rule => `
+                <div class="factor-item">
+                    <b>${rule.rule_type}</b>
+                    <span>${rule.statement}</span>
+                    <em>${Math.round((rule.confidence || 0) * 100)}%</em>
+                </div>
+            `).join('') || '<p class="muted-copy">ABTest 和审核复盘后会沉淀知识规则。</p>'}</div>
+        `;
+    }
 }
 
 // === Agent Workbench ===

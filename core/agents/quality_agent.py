@@ -49,6 +49,11 @@ class QualityAgent:
             scene_mode = metadata.get("scene_generation_mode", "")
             fusion_mode = metadata.get("fusion_mode", "")
             vision_source = metadata.get("vision_source", "")
+            level = metadata.get("commercial_quality_level", "")
+            if level == "needs_review":
+                review_issues.append(f"{artifact.name}: commercial_quality_level=needs_review")
+            elif level == "fail":
+                fatal_issues.append(f"{artifact.name}: commercial_quality_level=fail")
 
             # ---- Type-specific checks ----
             if artifact.type == "scene":
@@ -91,11 +96,16 @@ class QualityAgent:
                     self._vlm_verify_selling_point(job, artifact, review_issues)
 
         all_issues = fatal_issues + review_issues
+        quality_levels = [a.metadata.get("commercial_quality_level") for a in image_artifacts]
         score = max(0, 90 - len(fatal_issues) * 35 - len(review_issues) * 15)
         if fatal_issues:
             status = "fail"
         elif review_issues:
             status = "needs_review"
+        elif "commercial_scene_pass" in quality_levels:
+            status = "commercial_scene_pass"
+        elif quality_levels and all(level == "info_graph_pass" for level in quality_levels if level):
+            status = "info_graph_pass"
         elif not self._vision_agent:
             status = "manual_required"
             review_issues.append("no VLM available for automated quality verification")
@@ -110,15 +120,23 @@ class QualityAgent:
         )
 
     def _check_scene(self, artifact, metadata, scene_mode, fusion_mode, fatal, review):
+        strategy = metadata.get("generation_strategy", "")
+        level = metadata.get("commercial_quality_level", "")
+        if strategy != "reference_guided_scene_generation":
+            fatal.append(f"scene strategy must be reference_guided_scene_generation, got {strategy or scene_mode}")
+        if metadata.get("direct_white_bg_subject"):
+            fatal.append("scene directly used white_bg as subject")
+        if metadata.get("reference_based_fallback"):
+            review.append("scene is reference_based_fallback, not commercial pass")
+        if level != "commercial_scene_pass":
+            review.append(f"scene not commercial_scene_pass: {level or 'unknown'}")
         if scene_mode in ("rough_only", "blocked"):
             fatal.append(f"scene is {scene_mode}: cannot be formal output")
-        if fusion_mode == "single_edit_fallback":
-            fatal.append("scene used single_edit_fallback, not true multi-input fusion")
-        if fusion_mode not in ("true_fusion",) and artifact.type == "scene":
-            fatal.append(f"scene fusion_mode={fusion_mode}, only true_fusion qualifies")
 
         # VLM quality check result
         vlm_q = metadata.get("vlm_quality_check", {})
+        if not vlm_q or vlm_q.get("overall_quality") == "manual_required":
+            review.append("scene has no passing VLM commercial quality verification")
         if vlm_q.get("has_artifacts"):
             fatal.append(f"VLM detected artifacts in scene: {vlm_q.get('artifact_type')}")
         if vlm_q.get("structure_distorted"):
@@ -137,11 +155,28 @@ class QualityAgent:
                 review.append(f"scene elements unverified: {missing}")
 
     def _check_selling_point(self, job, artifact, metadata, vision_source, fatal, review):
+        strategy = metadata.get("generation_strategy", "")
+        level = metadata.get("commercial_quality_level", "")
+        if strategy == "info_graph_annotation" and level == "commercial_scene_pass":
+            fatal.append("info graph cannot be marked commercial_scene_pass")
+        if metadata.get("direct_white_bg_subject") and level == "commercial_scene_pass":
+            fatal.append("white_bg-based selling point cannot be commercial_scene_pass")
+        if level == "needs_review":
+            review.append("selling point requires manual review")
         if metadata.get("is_fallback_annotation"):
-            fatal.append("selling point uses fallback annotation coordinates (not VLM)")
+            review.append("selling point uses fallback annotation coordinates (not VLM)")
 
-        if not metadata.get("has_annotation"):
+        if not metadata.get("has_annotation") and not metadata.get("scene_demo"):
             fatal.append("selling point missing annotation data")
+        if metadata.get("scene_demo"):
+            if strategy != "reference_guided_scene_generation":
+                fatal.append("scene demo selling point must use reference_guided_scene_generation")
+            if level != "commercial_scene_pass":
+                review.append(f"scene demo selling point not commercial_scene_pass: {level or 'unknown'}")
+            vlm_q = metadata.get("vlm_quality_check", {})
+            if not vlm_q or vlm_q.get("overall_quality") == "manual_required":
+                review.append("scene demo has no passing VLM commercial verification")
+            return
 
         annotation_type = metadata.get("annotation_type", "")
         if annotation_type == "resting_areas":
@@ -164,6 +199,12 @@ class QualityAgent:
                 fatal.append("scratching system: no highlights drawn")
 
     def _check_detail(self, artifact, metadata, fatal, review):
+        if metadata.get("generation_strategy") != "material_detail_enhancement":
+            review.append("detail is not material_detail_enhancement strategy")
+        if metadata.get("direct_white_bg_subject"):
+            fatal.append("detail directly used white_bg as final subject")
+        if metadata.get("enhancement_mode") == "reference_based_fallback":
+            review.append("material detail enhancement unavailable; fallback candidate requires review")
         confidence = metadata.get("material_confidence", 0)
         vision_source = metadata.get("vision_source", "unknown")
         if confidence < 0.3:

@@ -13,6 +13,7 @@ from PIL import Image, ImageDraw
 
 from pipeline.step4_enhance import _content_bbox, _fit_image, _load_font, generate_detail_crops
 from core.agents.detail_target_agent import DetailTargetAgent
+from core.tools.reference_generation import material_detail_enhancement
 from core.workflows.base import BaseWorkflow, WorkflowContext
 from core.workflows.registry import register_workflow
 
@@ -60,11 +61,17 @@ class DetailWorkflow(BaseWorkflow):
             artifacts = []
 
             if best["confidence"] >= 0.5 or vision_source == "vlm":
-                # Good confidence or VLM-verified → formal output
+                # Good confidence or VLM-verified → formal detail candidate
                 artifact = self.save_image(best["image"], context, context.job.image_type, "detail")
                 artifact.metadata.update({
+                    "generation_strategy": "material_detail_enhancement",
+                    "commercial_quality_level": "needs_review" if best["mode"] == "reference_based_fallback" else "info_graph_pass",
+                    "reference_assets_used": ["original", "product_analysis"],
+                    "direct_white_bg_subject": False,
                     "material_type": best["material_type"],
                     "material_confidence": best["confidence"],
+                    "enhancement_mode": best["mode"],
+                    "enhancement_issues": best.get("issues", []),
                     "vision_source": vision_source,
                     "crop_region": best.get("crop_region", "unknown"),
                 })
@@ -89,6 +96,17 @@ class DetailWorkflow(BaseWorkflow):
                             f"{context.job.image_type}_{cand['material_type']}_candidate",
                             "detail_candidate",
                         )
+                        cand_artifact.metadata.update({
+                            "generation_strategy": "material_detail_enhancement",
+                            "commercial_quality_level": "needs_review",
+                            "reference_assets_used": ["original", "product_analysis"],
+                            "direct_white_bg_subject": False,
+                            "material_type": cand["material_type"],
+                            "material_confidence": cand["confidence"],
+                            "enhancement_mode": cand["mode"],
+                            "enhancement_issues": cand.get("issues", []),
+                            "vision_source": vision_source,
+                        })
                         artifacts.append(cand_artifact)
 
                 return self.ok_result(context, artifacts, context.trace.records[-2:])
@@ -101,8 +119,14 @@ class DetailWorkflow(BaseWorkflow):
                         "detail_candidate",
                     )
                     cand_artifact.metadata.update({
+                        "generation_strategy": "material_detail_enhancement",
+                        "commercial_quality_level": "needs_review",
+                        "reference_assets_used": ["original", "product_analysis"],
+                        "direct_white_bg_subject": False,
                         "material_type": cand["material_type"],
                         "material_confidence": cand["confidence"],
+                        "enhancement_mode": cand["mode"],
+                        "enhancement_issues": cand.get("issues", []),
                         "vision_source": vision_source,
                     })
                     artifacts.append(cand_artifact)
@@ -129,7 +153,7 @@ class DetailWorkflow(BaseWorkflow):
         self, context: WorkflowContext, material_regions: dict, requested_materials: list[str],
     ) -> list[dict]:
         """Generate closeup candidates for each requested material type."""
-        product = context.base_assets["white_bg"].convert("RGB")
+        product = context.base_assets["original"].convert("RGB")
         pw, ph = product.size
         candidates = []
 
@@ -158,15 +182,20 @@ class DetailWorkflow(BaseWorkflow):
                 cx2 = min(pw, x2 + margin_x)
                 cy2 = min(ph, y2 + margin_y)
 
-                closeup = product.crop((cx1, cy1, cx2, cy2))
-
-                # Create a detail card
-                card = self._render_material_card(closeup, material_type, confidence)
+                enhanced, issues, mode = material_detail_enhancement(
+                    original_photo=product,
+                    crop_box=(cx1, cy1, cx2, cy2),
+                    material_type=material_type,
+                    model=context.model,
+                )
+                card = self._render_material_card(enhanced, material_type, confidence)
                 candidates.append({
                     "image": card,
                     "material_type": material_type,
                     "confidence": confidence,
                     "crop_region": [cx1, cy1, cx2, cy2],
+                    "mode": mode,
+                    "issues": issues,
                 })
 
         return candidates
@@ -212,13 +241,17 @@ class DetailWorkflow(BaseWorkflow):
         """Fall back to general detail crop when no material region found."""
         target_agent = DetailTargetAgent()
         target = target_agent.resolve(context.job.description)
-        detail_source = context.base_assets["white_bg"]
+        detail_source = context.base_assets["original"]
 
         details = generate_detail_crops(detail_source, [context.job.description])
         artifacts = []
         if details:
             artifact = self.save_image(details[0]["crop"], context, f"{context.job.image_type}_candidate", "detail_candidate")
             artifact.metadata.update({
+                "generation_strategy": "reference_based_fallback",
+                "commercial_quality_level": "needs_review",
+                "reference_assets_used": ["original"],
+                "direct_white_bg_subject": False,
                 "material_type": "unknown",
                 "material_confidence": 0.0,
                 "vision_source": "none",
@@ -227,15 +260,9 @@ class DetailWorkflow(BaseWorkflow):
             artifacts.append(artifact)
 
         self._save_reason(context, "Cannot locate material region for closeup. Fallback to general crop.")
-        blocked = self.save_blocked_report(
-            context, context.job.image_type,
-            reason="material_region_not_located",
-        )
-        artifacts.append(blocked)
         context.trace.add(step="workflow.detail.no_material", status="warning",
             issues=["material_region_not_located: needs_review"])
-        return self.blocked_result(context, artifacts,
-            reason="material_region_not_located", traces=context.trace.records[-2:])
+        return self.ok_result(context, artifacts, context.trace.records[-2:])
 
     def _save_reason(self, context, reason: str):
         filename = f"img{context.job.image_index:02d}_{context.job.image_type}_reason.txt"

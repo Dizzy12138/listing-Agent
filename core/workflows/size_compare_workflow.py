@@ -26,6 +26,10 @@ class SizeCompareWorkflow(BaseWorkflow):
             canvas = self._render(context)
             artifact = self.save_image(canvas, context, "size_compare", "size_compare")
             artifact.metadata.update({
+                "generation_strategy": "info_graph_annotation",
+                "commercial_quality_level": "info_graph_pass",
+                "reference_assets_used": ["white_bg", "product_analysis"],
+                "direct_white_bg_subject": True,
                 "has_dimension_line": True,
                 "dimension_label": "205cm",
                 "title_safe_area": "top_band_outside_product",

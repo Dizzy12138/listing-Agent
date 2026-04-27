@@ -12,7 +12,7 @@ from PIL import Image
 def _get_openai_client():
     import config
     from openai import OpenAI
-    return OpenAI(api_key=config.OPENAI_API_KEY, base_url=config.OPENAI_BASE_URL)
+    return OpenAI(api_key=config.OPENAI_API_KEY, base_url=config.OPENAI_BASE_URL, timeout=20.0)
 
 
 def _image_to_base64(image: Image.Image) -> str:

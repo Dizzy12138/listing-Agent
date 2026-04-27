@@ -90,6 +90,7 @@ class GenerationService:
         # ---- Step 1: Asset extraction ----
         self._progress(progress, "AssetAgent: 主体标准化", 10)
         extracted = remove_background(product_image, model=model)
+        extracted["original"] = product_image
         extracted["transparent"].save(output_dir / "01_transparent.png", "PNG")
         extracted["white_bg"].save(output_dir / "01_white_bg.png", "PNG")
         asset_quality = AssetQualityGate().evaluate(extracted["transparent"], extracted["white_bg"])
@@ -107,6 +108,7 @@ class GenerationService:
         self._progress(progress, "VisionAgent: 产品结构分析", 15)
         vision_agent = ProductVisionAgent()
         product_analysis = vision_agent.analyze(extracted["white_bg"])
+        product_analysis = self._apply_sku_facts(product_analysis, sku)
 
         # Save analysis to output
         analysis_path = output_dir / "product_analysis.json"
@@ -171,7 +173,20 @@ class GenerationService:
             trace.add(
                 step="quality_agent.evaluate_artifacts",
                 status=result.quality.status,
-                input={"job_id": job.job_id, "artifact_count": len(result.artifacts)},
+                input={
+                    "job_id": job.job_id,
+                    "artifact_count": len(result.artifacts),
+                    "artifact_quality_metadata": [
+                        {
+                            "name": artifact.name,
+                            "generation_strategy": artifact.metadata.get("generation_strategy"),
+                            "commercial_quality_level": artifact.metadata.get("commercial_quality_level"),
+                            "reference_assets_used": artifact.metadata.get("reference_assets_used"),
+                            "direct_white_bg_subject": artifact.metadata.get("direct_white_bg_subject"),
+                        }
+                        for artifact in result.artifacts
+                    ],
+                },
                 issues=result.quality.issues,
             )
             results.append(result)
@@ -183,7 +198,7 @@ class GenerationService:
         artifacts.append(Artifact(artifact_id=f"{run_id}_trace", type="trace", name="trace.json", path=str(trace_path)))
 
         self._progress(progress, "完成", 100)
-        return {
+        response = {
             "run_id": run_id,
             "sku_id": sku.product_id,
             "output_dir": str(output_dir),
@@ -193,6 +208,27 @@ class GenerationService:
             "view_distribution": view_distribution,
             "traces": trace.records,
         }
+        try:
+            from core.services.creative_service import CreativeService
+
+            creative_version = CreativeService(output_dir=self.output_dir).record_generation_result(response)
+            response["creative_version"] = creative_version.model_dump()
+            trace.add(
+                step="creative_service.record_generation_result",
+                status="success",
+                input={"version_id": creative_version.version_id, "asset_count": len(creative_version.asset_ids)},
+            )
+            with open(trace_path, "w", encoding="utf-8") as f:
+                json.dump(trace.records, f, ensure_ascii=False, indent=2)
+            response["traces"] = trace.records
+        except Exception as exc:
+            trace.add(
+                step="creative_service.record_generation_result",
+                status="warning",
+                issues=[f"creative persistence failed: {exc}"],
+            )
+            response["creative_version"] = None
+        return response
 
     def _generate_scenes(self, sku: SKU, product_image: Image.Image, model: str) -> list[dict]:
         scene_count = sum(1 for item in sku.image_plan if resolve_workflow(item.type, item.description) == "scene_main")
@@ -207,3 +243,29 @@ class GenerationService:
     def _progress(self, callback: ProgressCallback | None, message: str, value: int):
         if callback:
             callback(message, value)
+
+    def _apply_sku_facts(self, product_analysis: dict, sku: SKU) -> dict:
+        """SKU facts override VLM guesses for hard selling points."""
+        text = " ".join([
+            sku.name,
+            sku.description,
+            sku.positioning,
+            " ".join(sku.selling_points),
+            " ".join(sku.keywords),
+        ]).lower()
+        product_analysis = dict(product_analysis)
+        visible = dict(product_analysis.get("visible_parts", {}))
+        base = dict(visible.get("base_area", {}))
+        if any(k in text for k in ["双底板", "double base", "wide base"]):
+            base["has_double_base"] = True
+            base["source"] = "sku_fact_override"
+            visible["base_area"] = base
+        product_analysis["visible_parts"] = visible
+        product_analysis["sku_facts"] = {
+            "source_priority": ["SKU facts", "ProductVisionAgent", "heuristic fallback"],
+            "height": "205cm" if "205" in text else None,
+            "double_base": base.get("has_double_base", False),
+            "resting_area_count": 6 if any(k in text for k in ["6个休息", "6 resting"]) else None,
+            "sisal_post_count": 6 if any(k in text for k in ["6根剑麻", "6 sisal"]) else None,
+        }
+        return product_analysis

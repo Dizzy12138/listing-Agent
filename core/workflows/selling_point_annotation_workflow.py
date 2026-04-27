@@ -20,6 +20,7 @@ from typing import Any
 from PIL import Image, ImageDraw
 
 from pipeline.step4_enhance import _content_bbox, _fit_image, _load_font, _wrap_text
+from core.tools.reference_generation import reference_guided_scene_generation
 from core.workflows.base import BaseWorkflow, WorkflowContext
 from core.workflows.registry import register_workflow
 
@@ -61,8 +62,8 @@ class SellingPointAnnotationWorkflow(BaseWorkflow):
     def run(self, context: WorkflowContext):
         category, annotation_type = _classify_selling_point(context.job.description)
 
-        # Scene demonstration → delegate to scene workflow
-        if category == "scene_demo":
+        # Scene demonstration for action-driven selling points.
+        if category == "scene_demo" or annotation_type in {"scratching_system", "stability_base"}:
             return self._run_scene_demo(context, annotation_type)
 
         # Material closeup → generate crop
@@ -82,9 +83,12 @@ class SellingPointAnnotationWorkflow(BaseWorkflow):
             stem = context.job.image_type
 
             if is_fallback:
-                # Fallback coordinates — save as candidate, not formal
-                artifact = self.save_image(image, context, f"{stem}_candidate", "selling_point_candidate")
+                artifact = self.save_image(image, context, stem, "selling_point")
                 artifact.metadata.update({
+                    "generation_strategy": "info_graph_annotation",
+                    "commercial_quality_level": "needs_review",
+                    "reference_assets_used": ["white_bg", "product_analysis"],
+                    "direct_white_bg_subject": True,
                     "annotation_type": annotation_type,
                     "has_annotation": True,
                     "is_fallback_annotation": True,
@@ -92,18 +96,19 @@ class SellingPointAnnotationWorkflow(BaseWorkflow):
                     "vision_source": "fallback",
                     **annotation_meta,
                 })
-                self._save_reason(context, "Annotation coordinates from fallback (not VLM). Manual review required.")
-                blocked = self.save_blocked_report(context, stem, reason="fallback_annotation",
-                    details={"annotation_type": annotation_type, "vision_source": "fallback"})
                 context.trace.add(step="workflow.selling_point.fallback", status="warning",
                     input={"annotation_type": annotation_type, "vision_source": "fallback"},
+                    output_artifact=artifact.path,
                     issues=["fallback_annotation: coordinates not from VLM"])
-                return self.blocked_result(context, [artifact, blocked],
-                    reason="fallback_annotation", traces=context.trace.records[-2:])
+                return self.ok_result(context, [artifact], context.trace.records[-2:])
             else:
                 # VLM coordinates — formal output
                 artifact = self.save_image(image, context, stem, "selling_point")
                 artifact.metadata.update({
+                    "generation_strategy": "info_graph_annotation",
+                    "commercial_quality_level": "info_graph_pass",
+                    "reference_assets_used": ["white_bg", "product_analysis"],
+                    "direct_white_bg_subject": True,
                     "annotation_type": annotation_type,
                     "has_annotation": True,
                     "is_fallback_annotation": False,
@@ -148,13 +153,58 @@ class SellingPointAnnotationWorkflow(BaseWorkflow):
                     reason="material_region_not_found", traces=context.trace.records[-2:])
 
     def _run_scene_demo(self, context: WorkflowContext, annotation_type: str):
-        """Scene demonstration — delegate to SceneWorkflow."""
-        from core.workflows.scene_main_workflow import SceneMainWorkflow
+        """Generate action demo as a whole scene, not a marked white-background diagram."""
         with context.trace.timed("workflow.selling_point_annotation.scene_demo"):
-            context.trace.add(step="workflow.selling_point.scene_demo_delegate", status="info",
-                input={"annotation_type": annotation_type},
-                issues=["delegated to scene_main workflow for scene demonstration"])
-            return SceneMainWorkflow().run(context)
+            product_analysis = context.base_assets.get("_product_analysis", {})
+            prompt = self._scene_demo_prompt(context, annotation_type)
+            image, issues, mode = reference_guided_scene_generation(
+                original_photo=context.base_assets["original"],
+                white_bg_reference=context.base_assets["white_bg"],
+                product_analysis=product_analysis,
+                scene_prompt=prompt,
+                model=context.model,
+                image_type=context.job.image_type,
+            )
+            vision_agent = context.base_assets.get("_vision_agent")
+            vlm_quality = {}
+            commercial_level = "needs_review"
+            if vision_agent:
+                required = self._required_elements(annotation_type)
+                vlm_quality = vision_agent.verify_quality(image, required_elements=required)
+                if (
+                    vlm_quality.get("overall_quality") == "pass"
+                    and not vlm_quality.get("has_artifacts", False)
+                    and not vlm_quality.get("structure_distorted", False)
+                    and mode != "reference_based_fallback"
+                ):
+                    commercial_level = "commercial_scene_pass"
+            artifact = self.save_image(image, context, context.job.image_type, "selling_point")
+            artifact.metadata.update({
+                "generation_strategy": "reference_guided_scene_generation",
+                "generation_mode": mode,
+                "commercial_quality_level": commercial_level,
+                "reference_assets_used": ["original", "white_bg", "product_analysis"],
+                "direct_white_bg_subject": False,
+                "annotation_type": annotation_type,
+                "has_annotation": False,
+                "scene_demo": True,
+                "scene_prompt": prompt,
+                "vlm_quality_check": vlm_quality,
+                "product_analysis_source": product_analysis.get("source", "unknown"),
+            })
+            context.trace.add(
+                step="workflow.selling_point.scene_demo.output",
+                status="success" if commercial_level == "commercial_scene_pass" else "warning",
+                input={
+                    "annotation_type": annotation_type,
+                    "generation_strategy": "reference_guided_scene_generation",
+                    "mode": mode,
+                    "reference_assets_used": ["original", "white_bg", "product_analysis"],
+                },
+                output_artifact=artifact.path,
+                issues=issues + vlm_quality.get("issues", []),
+            )
+            return self.ok_result(context, [artifact], context.trace.records[-2:])
 
     # ---- Rendering ----
 
@@ -439,6 +489,36 @@ class SellingPointAnnotationWorkflow(BaseWorkflow):
         filename = f"img{context.job.image_index:02d}_{context.job.image_type}_reason.txt"
         path = context.output_dir / filename
         path.write_text(reason, encoding="utf-8")
+
+    def _scene_demo_prompt(self, context: WorkflowContext, annotation_type: str) -> str:
+        prompts = {
+            "scratching_system": (
+                "Commercial ecommerce scene demonstration: a cat is actively scratching the sisal rope post or scratch board "
+                "on the light grey multi-level cat tree. Keep the product SKU recognizable and show the scratching function clearly."
+            ),
+            "stability_base": (
+                "Commercial ecommerce scene demonstration: a large cat moves on the cat tree while a child or family member is nearby, "
+                "showing that the wide double base keeps the tall cat tree stable and grounded."
+            ),
+            "resting_areas": (
+                "Commercial ecommerce scene demonstration: multiple cats rest on different platforms, condo and hammock areas of the cat tree."
+            ),
+            "climbing_path": (
+                "Commercial ecommerce scene demonstration: a cat moves along the ramp and platforms, showing the climbing route."
+            ),
+        }
+        return prompts.get(annotation_type, context.job.description)
+
+    def _required_elements(self, annotation_type: str) -> list[str]:
+        if annotation_type == "scratching_system":
+            return ["cat", "scratching action", "sisal post"]
+        if annotation_type == "stability_base":
+            return ["large cat", "wide base", "family or child"]
+        if annotation_type == "resting_areas":
+            return ["multiple cats", "resting platforms"]
+        if annotation_type == "climbing_path":
+            return ["cat", "climbing route"]
+        return ["cat tree"]
 
     def _title(self, description, annotation_type):
         titles = {

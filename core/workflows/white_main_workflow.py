@@ -12,6 +12,12 @@ class WhiteMainWorkflow(BaseWorkflow):
         with context.trace.timed("workflow.white_main"):
             image = create_main_image(context.base_assets["white_bg"])
             artifact = self.save_image(image, context, "white_main", "main")
+            artifact.metadata.update({
+                "generation_strategy": "reference_info_graph",
+                "commercial_quality_level": "info_graph_pass",
+                "reference_assets_used": ["white_bg"],
+                "direct_white_bg_subject": True,
+            })
             context.trace.add(
                 step="workflow.white_main.output",
                 status="success",

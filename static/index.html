@@ -17,6 +17,7 @@
     <nav class="header-nav">
         <button class="active" onclick="showPage('dashboard')">数据看板</button>
         <button onclick="showPage('agent-workbench')">Agent工作台</button>
+        <button onclick="showPage('creative-os')">创意闭环</button>
         <button onclick="showPage('products')">SKU管理</button>
         <button onclick="showPage('assets')">图片资产库</button>
         <button onclick="showPage('workflows')">工作流模板</button>
@@ -80,6 +81,41 @@
             <div class="card-title">模型配置</div>
             </div>
             <div id="modelConfig" style="display:grid; grid-template-columns: 1fr 1fr; gap: 12px;"></div>
+        </div>
+    </div>
+
+    <!-- Creative OS Page -->
+    <div id="page-creative-os" class="page">
+        <div class="card-header" style="margin-bottom: 24px;">
+            <div>
+                <div class="card-title" style="font-size: 24px;">创意闭环操作台</div>
+                <p class="muted-copy">策略反推、分层素材、审核标签、实验指标和知识规则。</p>
+            </div>
+            <button class="btn btn-primary" onclick="createCreativeTaskFromFirstSku()">生成策略 Brief</button>
+        </div>
+        <div class="creative-os-grid">
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">策略 Brief</div>
+                    <button class="btn btn-sm btn-secondary" onclick="loadCreativeOS()">刷新</button>
+                </div>
+                <div id="creativeStrategyPanel"></div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">分层版本</div>
+                    <button class="btn btn-sm btn-secondary" onclick="createTemplateVersionFromFirstSku()">生成模板资产</button>
+                </div>
+                <div id="creativeVersionPanel"></div>
+            </div>
+            <div class="card">
+                <div class="card-header"><div class="card-title">审核反馈</div></div>
+                <div id="creativeReviewPanel"></div>
+            </div>
+            <div class="card">
+                <div class="card-header"><div class="card-title">实验与知识规则</div></div>
+                <div id="creativeLearningPanel"></div>
+            </div>
         </div>
     </div>
 
