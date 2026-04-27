@@ -1,0 +1,656 @@
+[
+  {
+    "run_id": "task_ce83110a",
+    "step": "asset_agent.extract",
+    "status": "success",
+    "input": {
+      "sku_id": "PCT020",
+      "image_path": "/Users/edy/image-demo/products/images/pct020.jpeg"
+    },
+    "model": "gpt-image-2",
+    "output_artifact": "output/PCT020_20260427_110859/01_transparent.png",
+    "cost": null,
+    "duration_ms": null,
+    "issues": [],
+    "created_at": "2026-04-27T11:13:14"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "vision_agent.product_analysis",
+    "status": "warning",
+    "input": {
+      "sku_id": "PCT020"
+    },
+    "model": null,
+    "output_artifact": "output/PCT020_20260427_110859/product_analysis.json",
+    "cost": null,
+    "duration_ms": null,
+    "issues": [
+      "fallback analysis used"
+    ],
+    "created_at": "2026-04-27T11:14:16"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "quality_agent.view_distribution",
+    "status": "warning",
+    "input": {
+      "sku_id": "PCT020"
+    },
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": null,
+    "issues": [
+      "view direction repeated: {'front_open': 2, 'left_45': 2, 'detail_closeup': 2, 'right_45': 2}"
+    ],
+    "created_at": "2026-04-27T11:15:35"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "workflow.white_main.output",
+    "status": "success",
+    "input": {
+      "job_id": "PCT020_1",
+      "workflow_key": "white_main"
+    },
+    "model": null,
+    "output_artifact": "output/PCT020_20260427_110859/img01_white_main.png",
+    "cost": null,
+    "duration_ms": null,
+    "issues": [],
+    "created_at": "2026-04-27T11:15:35"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "workflow.white_main",
+    "status": "success",
+    "input": {},
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": 125,
+    "issues": [],
+    "created_at": "2026-04-27T11:15:35"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "quality_agent.evaluate_artifacts",
+    "status": "info_graph_pass",
+    "input": {
+      "job_id": "PCT020_1",
+      "artifact_count": 1,
+      "artifact_quality_metadata": [
+        {
+          "name": "img01_white_main.png",
+          "generation_strategy": "reference_info_graph",
+          "commercial_quality_level": "info_graph_pass",
+          "reference_assets_used": [
+            "white_bg"
+          ],
+          "direct_white_bg_subject": true
+        }
+      ]
+    },
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": null,
+    "issues": [],
+    "created_at": "2026-04-27T11:15:35"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "workflow.scene_main.reference_guided.output",
+    "status": "success",
+    "input": {
+      "job_id": "PCT020_2",
+      "generation_strategy": "reference_guided_scene_generation",
+      "mode": "reference_guided_text_fallback",
+      "reference_assets_used": [
+        "original",
+        "white_bg",
+        "product_analysis"
+      ],
+      "scene_prompt": "A premium ecommerce lifestyle photo of 205cm XXL Cat Tree Tower in a spacious luxury living room. Scene requirement: 有大的压迫感，底部接近图片底部，场景图可以是豪华一点的大房子的客厅场景，可以增加一个小朋友，亲子和猫猫的互动. Low angle, floor-to-ceiling composition, warm natural daylight, a Maine Coon cat on the top platform, another cat resting on a "
+    },
+    "model": "gpt-image-2",
+    "output_artifact": "output/PCT020_20260427_110859/img02_scene_main.png",
+    "cost": null,
+    "duration_ms": null,
+    "issues": [
+      "reference_guided_edit_failed: Error code: 524 - {'error': {'code': 'upstream_524', 'message': 'Upstream returned HTTP 524 after a media generation request. The request may have been processed by the provider, so the gateway did not retry it to avoid duplicate generation or duplicate billing. Upstream response: error code: 524', 'type': 'upstream_ambiguous_timeout'}}",
+      "text_generation_no_image_reference"
+    ],
+    "created_at": "2026-04-27T11:24:15"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "workflow.scene_main.reference_guided",
+    "status": "success",
+    "input": {},
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": 519069,
+    "issues": [],
+    "created_at": "2026-04-27T11:24:15"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "quality_agent.evaluate_artifacts",
+    "status": "needs_review",
+    "input": {
+      "job_id": "PCT020_2",
+      "artifact_count": 1,
+      "artifact_quality_metadata": [
+        {
+          "name": "img02_scene_main.png",
+          "generation_strategy": "reference_guided_scene_generation",
+          "commercial_quality_level": "commercial_scene_pass",
+          "reference_assets_used": [
+            "original",
+            "white_bg",
+            "product_analysis"
+          ],
+          "direct_white_bg_subject": false
+        }
+      ]
+    },
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": null,
+    "issues": [
+      "scene elements unverified: ['cats', 'child', 'family_interaction', 'low_angle', 'floor_contact', 'luxury_living_room']"
+    ],
+    "created_at": "2026-04-27T11:24:25"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "workflow.selling_point.fallback",
+    "status": "warning",
+    "input": {
+      "annotation_type": "resting_areas",
+      "vision_source": "fallback"
+    },
+    "model": null,
+    "output_artifact": "output/PCT020_20260427_110859/img03_selling_point.png",
+    "cost": null,
+    "duration_ms": null,
+    "issues": [
+      "fallback_annotation: coordinates not from VLM"
+    ],
+    "created_at": "2026-04-27T11:24:25"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "workflow.selling_point_annotation.structural",
+    "status": "success",
+    "input": {},
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": 120,
+    "issues": [],
+    "created_at": "2026-04-27T11:24:25"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "quality_agent.evaluate_artifacts",
+    "status": "needs_review",
+    "input": {
+      "job_id": "PCT020_3",
+      "artifact_count": 1,
+      "artifact_quality_metadata": [
+        {
+          "name": "img03_selling_point.png",
+          "generation_strategy": "info_graph_annotation",
+          "commercial_quality_level": "needs_review",
+          "reference_assets_used": [
+            "white_bg",
+            "product_analysis"
+          ],
+          "direct_white_bg_subject": true
+        }
+      ]
+    },
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": null,
+    "issues": [
+      "img03_selling_point.png: commercial_quality_level=needs_review",
+      "selling point requires manual review",
+      "selling point uses fallback annotation coordinates (not VLM)"
+    ],
+    "created_at": "2026-04-27T11:24:32"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "workflow.selling_point.scene_demo.output",
+    "status": "success",
+    "input": {
+      "annotation_type": "scratching_system",
+      "generation_strategy": "reference_guided_scene_generation",
+      "mode": "reference_guided_text_fallback",
+      "reference_assets_used": [
+        "original",
+        "white_bg",
+        "product_analysis"
+      ]
+    },
+    "model": null,
+    "output_artifact": "output/PCT020_20260427_110859/img04_selling_point.png",
+    "cost": null,
+    "duration_ms": null,
+    "issues": [
+      "reference_guided_edit_failed: Error code: 524 - {'error': {'code': 'upstream_524', 'message': 'Upstream returned HTTP 524 after a media generation request. The request may have been processed by the provider, so the gateway did not retry it to avoid duplicate generation or duplicate billing. Upstream response: error code: 524', 'type': 'upstream_ambiguous_timeout'}}",
+      "text_generation_no_image_reference"
+    ],
+    "created_at": "2026-04-27T11:33:33"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "workflow.selling_point_annotation.scene_demo",
+    "status": "success",
+    "input": {},
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": 541529,
+    "issues": [],
+    "created_at": "2026-04-27T11:33:33"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "quality_agent.evaluate_artifacts",
+    "status": "needs_review",
+    "input": {
+      "job_id": "PCT020_4",
+      "artifact_count": 1,
+      "artifact_quality_metadata": [
+        {
+          "name": "img04_selling_point.png",
+          "generation_strategy": "reference_guided_scene_generation",
+          "commercial_quality_level": "commercial_scene_pass",
+          "reference_assets_used": [
+            "original",
+            "white_bg",
+            "product_analysis"
+          ],
+          "direct_white_bg_subject": false
+        }
+      ]
+    },
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": null,
+    "issues": [
+      "VLM: selling point unclear: ['No visible annotation markers (numbers/arrows/highlights) indicating the sisal posts and scratching board, so annotation positioning cannot be verified.']",
+      "VLM: annotation markers may be mispositioned"
+    ],
+    "created_at": "2026-04-27T11:33:44"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "workflow.selling_point.scene_demo.output",
+    "status": "warning",
+    "input": {
+      "annotation_type": "stability_base",
+      "generation_strategy": "reference_guided_scene_generation",
+      "mode": "reference_guided_edit",
+      "reference_assets_used": [
+        "original",
+        "white_bg",
+        "product_analysis"
+      ]
+    },
+    "model": null,
+    "output_artifact": "output/PCT020_20260427_110859/img05_selling_point.png",
+    "cost": null,
+    "duration_ms": null,
+    "issues": [
+      "Visible white-block/blur artifact over the child's face (retouching/anonymization)"
+    ],
+    "created_at": "2026-04-27T11:40:16"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "workflow.selling_point_annotation.scene_demo",
+    "status": "success",
+    "input": {},
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": 392870,
+    "issues": [],
+    "created_at": "2026-04-27T11:40:16"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "quality_agent.evaluate_artifacts",
+    "status": "needs_review",
+    "input": {
+      "job_id": "PCT020_5",
+      "artifact_count": 1,
+      "artifact_quality_metadata": [
+        {
+          "name": "img05_selling_point.png",
+          "generation_strategy": "reference_guided_scene_generation",
+          "commercial_quality_level": "needs_review",
+          "reference_assets_used": [
+            "original",
+            "white_bg",
+            "product_analysis"
+          ],
+          "direct_white_bg_subject": false
+        }
+      ]
+    },
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": null,
+    "issues": [
+      "img05_selling_point.png: commercial_quality_level=needs_review",
+      "selling point requires manual review",
+      "scene demo selling point not commercial_scene_pass: needs_review",
+      "VLM: selling point unclear: ['The image does not clearly demonstrate or emphasize the double-base stability feature (no clear view/comparison of the base structure).', 'No annotation markers (arrows/highlights/numbers) are present to indicate the double base plates or stability-related parts.', 'The lifestyle scene (cat and person) distracts from communicating the stability-base selling point.']",
+      "VLM: annotation markers may be mispositioned"
+    ],
+    "created_at": "2026-04-27T11:40:29"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "workflow.detail.low_confidence",
+    "status": "warning",
+    "input": {},
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": null,
+    "issues": [
+      "material_confidence=0.40, vision_source=fallback"
+    ],
+    "created_at": "2026-04-27T11:50:21"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "workflow.detail",
+    "status": "success",
+    "input": {},
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": 592006,
+    "issues": [],
+    "created_at": "2026-04-27T11:50:21"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "quality_agent.evaluate_artifacts",
+    "status": "fail",
+    "input": {
+      "job_id": "PCT020_6",
+      "artifact_count": 4,
+      "artifact_quality_metadata": [
+        {
+          "name": "img06_detail_plush_fabric_candidate.png",
+          "generation_strategy": "material_detail_enhancement",
+          "commercial_quality_level": "needs_review",
+          "reference_assets_used": [
+            "original",
+            "product_analysis"
+          ],
+          "direct_white_bg_subject": false
+        },
+        {
+          "name": "img06_detail_sisal_rope_candidate.png",
+          "generation_strategy": "material_detail_enhancement",
+          "commercial_quality_level": "needs_review",
+          "reference_assets_used": [
+            "original",
+            "product_analysis"
+          ],
+          "direct_white_bg_subject": false
+        },
+        {
+          "name": "img06_detail_board_material_candidate.png",
+          "generation_strategy": "material_detail_enhancement",
+          "commercial_quality_level": "needs_review",
+          "reference_assets_used": [
+            "original",
+            "product_analysis"
+          ],
+          "direct_white_bg_subject": false
+        },
+        {
+          "name": "img06_detail_blocked.json",
+          "generation_strategy": null,
+          "commercial_quality_level": null,
+          "reference_assets_used": null,
+          "direct_white_bg_subject": null
+        }
+      ]
+    },
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": null,
+    "issues": [
+      "output blocked: material_detection_low_confidence",
+      "img06_detail_plush_fabric_candidate.png: commercial_quality_level=needs_review",
+      "detail_candidate requires manual review: img06_detail_plush_fabric_candidate.png",
+      "img06_detail_sisal_rope_candidate.png: commercial_quality_level=needs_review",
+      "detail_candidate requires manual review: img06_detail_sisal_rope_candidate.png",
+      "img06_detail_board_material_candidate.png: commercial_quality_level=needs_review",
+      "detail_candidate requires manual review: img06_detail_board_material_candidate.png"
+    ],
+    "created_at": "2026-04-27T11:50:21"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "workflow.scene_main.reference_guided.output",
+    "status": "warning",
+    "input": {
+      "job_id": "PCT020_7",
+      "generation_strategy": "reference_guided_scene_generation",
+      "mode": "reference_based_fallback",
+      "reference_assets_used": [
+        "original",
+        "white_bg",
+        "product_analysis"
+      ],
+      "scene_prompt": "A realistic family living room scene featuring 205cm XXL Cat Tree Tower, designed for multi-cat households. Show multiple cats using different resting areas and platforms, with a parent and child in the room. The product must remain structurally accurate, full height visible, naturally blended into "
+    },
+    "model": "gpt-image-2",
+    "output_artifact": "output/PCT020_20260427_110859/img07_scene_lifestyle.png",
+    "cost": null,
+    "duration_ms": null,
+    "issues": [
+      "reference_guided_edit_failed: Error code: 400 - {'error': {'message': '上游返回错误 (status 400): {\\n  \"error\": {\\n    \"message\": \"Tool choice \\'image_generation\\' not found in \\'tools\\' parameter.\",\\n    \"type\": \"invalid_request_error\",\\n    \"param\": \"tool_choice\",\\n    \"code\": null\\n  }\\n} (request id: 202604271151052868914417piqmMen)', 'type': 'upstream_error', 'param': '', 'code': 'upstream_400'}}",
+      "reference_guided_text_failed: Error code: 400 - {'error': {'message': '上游返回错误 (status 400): {\\n  \"error\": {\\n    \"message\": \"Tool choice \\'image_generation\\' not found in \\'tools\\' parameter.\",\\n    \"type\": \"invalid_request_error\",\\n    \"param\": \"tool_choice\",\\n    \"code\": null\\n  }\\n} (request id: 20260427115120944537284atao6mDS)', 'type': 'upstream_error', 'param': '', 'code': 'upstream_400'}}",
+      "reference_based_fallback",
+      "Requested scene elements missing (cats, child, family_interaction, luxury_living_room).",
+      "Environment appears like an office/corridor rather than a luxury living room."
+    ],
+    "created_at": "2026-04-27T11:51:31"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "workflow.scene_main.reference_guided",
+    "status": "success",
+    "input": {},
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": 69695,
+    "issues": [],
+    "created_at": "2026-04-27T11:51:31"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "quality_agent.evaluate_artifacts",
+    "status": "needs_review",
+    "input": {
+      "job_id": "PCT020_7",
+      "artifact_count": 1,
+      "artifact_quality_metadata": [
+        {
+          "name": "img07_scene_lifestyle.png",
+          "generation_strategy": "reference_guided_scene_generation",
+          "commercial_quality_level": "needs_review",
+          "reference_assets_used": [
+            "original",
+            "white_bg",
+            "product_analysis"
+          ],
+          "direct_white_bg_subject": false
+        }
+      ]
+    },
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": null,
+    "issues": [
+      "img07_scene_lifestyle.png: commercial_quality_level=needs_review",
+      "scene is reference_based_fallback, not commercial pass",
+      "scene not commercial_scene_pass: needs_review",
+      "scene elements unverified: ['cats', 'child', 'family_interaction', 'floor_contact', 'luxury_living_room']",
+      "VLM post-check: missing scene elements: ['cats', 'child', 'family_interaction', 'luxury_living_room']"
+    ],
+    "created_at": "2026-04-27T11:51:40"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "workflow.selling_point.fallback",
+    "status": "warning",
+    "input": {
+      "annotation_type": "climbing_path",
+      "vision_source": "fallback"
+    },
+    "model": null,
+    "output_artifact": "output/PCT020_20260427_110859/img08_selling_point.png",
+    "cost": null,
+    "duration_ms": null,
+    "issues": [
+      "fallback_annotation: coordinates not from VLM"
+    ],
+    "created_at": "2026-04-27T11:51:40"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "workflow.selling_point_annotation.structural",
+    "status": "success",
+    "input": {},
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": 91,
+    "issues": [],
+    "created_at": "2026-04-27T11:51:40"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "quality_agent.evaluate_artifacts",
+    "status": "needs_review",
+    "input": {
+      "job_id": "PCT020_8",
+      "artifact_count": 1,
+      "artifact_quality_metadata": [
+        {
+          "name": "img08_selling_point.png",
+          "generation_strategy": "info_graph_annotation",
+          "commercial_quality_level": "needs_review",
+          "reference_assets_used": [
+            "white_bg",
+            "product_analysis"
+          ],
+          "direct_white_bg_subject": true
+        }
+      ]
+    },
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": null,
+    "issues": [
+      "img08_selling_point.png: commercial_quality_level=needs_review",
+      "selling point requires manual review",
+      "selling point uses fallback annotation coordinates (not VLM)"
+    ],
+    "created_at": "2026-04-27T11:51:46"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "workflow.size_compare.output",
+    "status": "success",
+    "input": {
+      "job_id": "PCT020_9",
+      "view_type": "front_open"
+    },
+    "model": null,
+    "output_artifact": "output/PCT020_20260427_110859/img09_size_compare.png",
+    "cost": null,
+    "duration_ms": null,
+    "issues": [],
+    "created_at": "2026-04-27T11:51:47"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "workflow.size_compare",
+    "status": "success",
+    "input": {},
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": 78,
+    "issues": [],
+    "created_at": "2026-04-27T11:51:47"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "quality_agent.evaluate_artifacts",
+    "status": "info_graph_pass",
+    "input": {
+      "job_id": "PCT020_9",
+      "artifact_count": 1,
+      "artifact_quality_metadata": [
+        {
+          "name": "img09_size_compare.png",
+          "generation_strategy": "info_graph_annotation",
+          "commercial_quality_level": "info_graph_pass",
+          "reference_assets_used": [
+            "white_bg",
+            "product_analysis"
+          ],
+          "direct_white_bg_subject": true
+        }
+      ]
+    },
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": null,
+    "issues": [],
+    "created_at": "2026-04-27T11:51:47"
+  },
+  {
+    "run_id": "task_ce83110a",
+    "step": "creative_service.record_generation_result",
+    "status": "success",
+    "input": {
+      "version_id": "cv_e63af533",
+      "asset_count": 14
+    },
+    "model": null,
+    "output_artifact": null,
+    "cost": null,
+    "duration_ms": null,
+    "issues": [],
+    "created_at": "2026-04-27T11:51:47"
+  }
+]

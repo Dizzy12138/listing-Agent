@@ -1,0 +1,9 @@
+{
+  "job_id": "PCT020_6",
+  "image_type": "detail",
+  "blocked_reason": "material_detection_low_confidence",
+  "details": {
+    "best_confidence": 0.4,
+    "vision_source": "fallback"
+  }
+}

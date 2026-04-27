@@ -1,0 +1,306 @@
+{
+  "product_bbox": [
+    9.6,
+    2.1,
+    77.5,
+    100.0
+  ],
+  "overall_height_estimate": "tall",
+  "structure_type": "multi-level cat tower",
+  "visible_parts": {
+    "platforms": [
+      {
+        "name": "top platform",
+        "bbox": [
+          30.0,
+          2.1,
+          57.1,
+          13.9
+        ],
+        "level": "top",
+        "confidence": 0.4
+      },
+      {
+        "name": "upper perch",
+        "bbox": [
+          19.8,
+          13.9,
+          47.0,
+          26.6
+        ],
+        "level": "upper",
+        "confidence": 0.4
+      },
+      {
+        "name": "mid condo top",
+        "bbox": [
+          36.8,
+          23.7,
+          63.9,
+          37.4
+        ],
+        "level": "mid-upper",
+        "confidence": 0.4
+      },
+      {
+        "name": "mid platform",
+        "bbox": [
+          26.6,
+          41.3,
+          53.8,
+          53.0
+        ],
+        "level": "mid",
+        "confidence": 0.4
+      },
+      {
+        "name": "lower rest",
+        "bbox": [
+          40.2,
+          56.0,
+          67.3,
+          68.7
+        ],
+        "level": "lower",
+        "confidence": 0.4
+      },
+      {
+        "name": "bottom bed",
+        "bbox": [
+          23.2,
+          72.6,
+          53.8,
+          85.3
+        ],
+        "level": "bottom",
+        "confidence": 0.4
+      }
+    ],
+    "sisal_posts": [
+      {
+        "name": "left post",
+        "bbox": [
+          23.2,
+          19.8,
+          30.0,
+          65.8
+        ],
+        "confidence": 0.4
+      },
+      {
+        "name": "center post",
+        "bbox": [
+          38.1,
+          16.8,
+          44.9,
+          70.6
+        ],
+        "confidence": 0.4
+      },
+      {
+        "name": "right post",
+        "bbox": [
+          51.7,
+          31.5,
+          58.5,
+          80.4
+        ],
+        "confidence": 0.4
+      }
+    ],
+    "scratch_boards": [
+      {
+        "name": "lower board",
+        "bbox": [
+          19.8,
+          70.6,
+          43.6,
+          82.4
+        ],
+        "confidence": 0.3
+      },
+      {
+        "name": "mid board",
+        "bbox": [
+          40.2,
+          53.0,
+          60.5,
+          62.8
+        ],
+        "confidence": 0.3
+      }
+    ],
+    "base_area": {
+      "bbox": [
+        9.6,
+        82.4,
+        77.5,
+        100.0
+      ],
+      "has_double_base": true,
+      "confidence": 0.4,
+      "source": "sku_fact_override"
+    },
+    "hammock_area": [
+      {
+        "name": "mid hammock",
+        "bbox": [
+          30.0,
+          43.2,
+          50.4,
+          56.0
+        ],
+        "confidence": 0.3
+      }
+    ],
+    "condo_area": [
+      {
+        "name": "enclosed condo",
+        "bbox": [
+          33.4,
+          26.6,
+          60.5,
+          43.2
+        ],
+        "confidence": 0.4
+      }
+    ],
+    "ramp_area": [
+      {
+        "name": "lower ramp",
+        "bbox": [
+          16.4,
+          60.9,
+          40.2,
+          78.5
+        ],
+        "confidence": 0.3
+      }
+    ],
+    "hanging_toys": []
+  },
+  "climbing_path": [
+    {
+      "from": "base",
+      "to": "lower rest",
+      "approximate_route": [
+        [
+          33.4,
+          85.3
+        ],
+        [
+          47.0,
+          65.8
+        ]
+      ]
+    },
+    {
+      "from": "lower rest",
+      "to": "mid platform",
+      "approximate_route": [
+        [
+          47.0,
+          65.8
+        ],
+        [
+          36.8,
+          49.1
+        ]
+      ]
+    },
+    {
+      "from": "mid platform",
+      "to": "condo",
+      "approximate_route": [
+        [
+          36.8,
+          49.1
+        ],
+        [
+          49.0,
+          33.5
+        ]
+      ]
+    },
+    {
+      "from": "condo",
+      "to": "upper perch",
+      "approximate_route": [
+        [
+          49.0,
+          33.5
+        ],
+        [
+          35.4,
+          19.8
+        ]
+      ]
+    },
+    {
+      "from": "upper perch",
+      "to": "top platform",
+      "approximate_route": [
+        [
+          35.4,
+          19.8
+        ],
+        [
+          43.6,
+          8.0
+        ]
+      ]
+    }
+  ],
+  "material_regions": {
+    "plush_fabric": [
+      {
+        "bbox": [
+          26.6,
+          36.4,
+          57.1,
+          56.0
+        ],
+        "confidence": 0.4
+      }
+    ],
+    "sisal_rope": [
+      {
+        "bbox": [
+          23.2,
+          19.8,
+          30.0,
+          65.8
+        ],
+        "confidence": 0.4
+      }
+    ],
+    "board_material": [
+      {
+        "bbox": [
+          19.8,
+          70.6,
+          43.6,
+          82.4
+        ],
+        "confidence": 0.3
+      }
+    ]
+  },
+  "occluded_or_uncertain_parts": [
+    "back side",
+    "internal condo space",
+    "base underside"
+  ],
+  "source": "fallback",
+  "sku_facts": {
+    "source_priority": [
+      "SKU facts",
+      "ProductVisionAgent",
+      "heuristic fallback"
+    ],
+    "height": "205cm",
+    "double_base": true,
+    "resting_area_count": 6,
+    "sisal_post_count": 6
+  }
+}

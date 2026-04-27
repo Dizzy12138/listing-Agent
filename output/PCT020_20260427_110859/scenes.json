@@ -1,0 +1,28 @@
+[
+  {
+    "name": "豪华客厅亲子互动场景",
+    "description_zh": "豪华客厅内的大型猫爬架场景，突出高度、稳定性、缅因猫和小朋友互动。",
+    "description_en": "A premium ecommerce lifestyle photo of 205cm XXL Cat Tree Tower in a spacious luxury living room. Scene requirement: 有大的压迫感，底部接近图片底部，场景图可以是豪华一点的大房子的客厅场景，可以增加一个小朋友，亲子和猫猫的互动. Low angle, floor-to-ceiling composition, warm natural daylight, a Maine Coon cat on the top platform, another cat resting on a lower platform, and a child nearby interacting naturally. The cat tree should look tall, stable, grounded on the floor, with natural contact shadows and no transparent checkerboard or white blocks.",
+    "key_elements": [
+      "luxury living room",
+      "Maine Coon cat",
+      "child interaction",
+      "natural shadows"
+    ],
+    "mood": "premium warm lifestyle",
+    "camera_angle": "low angle"
+  },
+  {
+    "name": "多猫家庭生活场景",
+    "description_zh": "现代家庭客厅中多只猫使用猫爬架，强调多层休息和家庭氛围。",
+    "description_en": "A realistic family living room scene featuring 205cm XXL Cat Tree Tower, designed for multi-cat households. Show multiple cats using different resting areas and platforms, with a parent and child in the room. The product must remain structurally accurate, full height visible, naturally blended into the room, standing on the floor with soft shadows and consistent lighting.",
+    "key_elements": [
+      "multi-cat",
+      "family",
+      "resting platforms",
+      "home interior"
+    ],
+    "mood": "cozy family lifestyle",
+    "camera_angle": "slightly low front angle"
+  }
+]
