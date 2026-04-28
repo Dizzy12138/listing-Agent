@@ -180,6 +180,52 @@
     </div>
 </div>
 
+<!-- Upload Pack Modal -->
+<div class="modal-overlay" id="uploadPackModal">
+    <div class="modal">
+        <div class="modal-header"><h2>上传 PDF 素材包</h2><button class="modal-close" onclick="closeModal('uploadPackModal')">✕</button></div>
+        <div class="modal-body">
+            <form onsubmit="handlePackUpload(event)">
+                <div class="form-grid">
+                    <div class="form-group full"><label class="form-label">PDF 文件 *</label>
+                        <div class="upload-zone"><div class="icon">📄</div><div class="text">拖拽 PDF 到此处，或 <strong>点击上传</strong></div><input type="file" name="file" accept=".pdf" required></div>
+                    </div>
+                    <div class="form-group"><label class="form-label">素材包名称</label><input class="form-input" name="name" placeholder="如 Feandrea listing图标集"></div>
+                    <div class="form-group"><label class="form-label">适用品类</label><input class="form-input" name="category" value="Pet Supplies,Cat Furniture"></div>
+                    <div class="form-group full"><label class="form-label">用途</label><input class="form-input" name="usage" value="listing_info_graph,feature_icon"></div>
+                </div>
+                <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('uploadPackModal')">取消</button>
+                    <button type="submit" class="btn btn-primary">📤 上传并解析</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Upload Doc Modal -->
+<div class="modal-overlay" id="uploadDocModal">
+    <div class="modal">
+        <div class="modal-header"><h2>上传知识库文档</h2><button class="modal-close" onclick="closeModal('uploadDocModal')">✕</button></div>
+        <div class="modal-body">
+            <form onsubmit="handleDocUpload(event)">
+                <div class="form-grid">
+                    <div class="form-group full"><label class="form-label">文档文件 *</label>
+                        <div class="upload-zone"><div class="icon">📋</div><div class="text">支持 PDF / DOCX，拖拽或 <strong>点击上传</strong></div><input type="file" name="file" accept=".pdf,.docx,.doc" required></div>
+                    </div>
+                    <div class="form-group"><label class="form-label">文档名称</label><input class="form-input" name="name" placeholder="如 猫爬架Amazon模板"></div>
+                    <div class="form-group"><label class="form-label">英文名称</label><input class="form-input" name="name_en" placeholder="Cat Tree Template"></div>
+                    <div class="form-group full"><label class="form-label">适用品类</label><input class="form-input" name="category" value="Pet Supplies,Cat Furniture"></div>
+                </div>
+                <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('uploadDocModal')">取消</button>
+                    <button type="submit" class="btn btn-primary">📤 上传并解析</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <script src="/static/app.js"></script>
 </body>
 </html>

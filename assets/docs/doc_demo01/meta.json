@@ -1,0 +1,101 @@
+{
+  "doc_id": "doc_demo01",
+  "name": "猫爬架 Amazon 上货图通用提示词模板",
+  "name_en": "Cat Tree / Cat Tower Amazon Listing Image Prompt Template",
+  "category": [
+    "Pet Supplies",
+    "Cat Furniture"
+  ],
+  "file_type": "pdf",
+  "source_file": "",
+  "upload_time": "2026-04-28T13:29:46",
+  "parse_status": "parsed",
+  "summary": "Amazon猫爬架品类上货图生成模板，包含全局规则、场景要求和检查清单。",
+  "rule_count": 12,
+  "checklist_count": 8,
+  "linked_sku_count": 1,
+  "parsed_knowledge": {
+    "category_path": "Pet Supplies > Cat Supplies > Cat Furniture > Cat Tree / Cat Tower / Cat Condo",
+    "summary": "Amazon猫爬架品类上货图生成模板，包含全局规则、场景要求、负面提示词和检查清单。",
+    "applicable_products": [],
+    "global_rules": [
+      "保持产品结构、比例、颜色、材质、功能部件一致",
+      "不要重设计产品外观",
+      "白底图需完整展示产品全貌",
+      "场景图需体现产品在真实家居中的使用场景"
+    ],
+    "image_plan_templates": [
+      {
+        "type": "hero_scene",
+        "name": "首图",
+        "size": "2000x2000"
+      },
+      {
+        "type": "lifestyle_scene",
+        "name": "场景图",
+        "size": "2000x2000"
+      },
+      {
+        "type": "material_detail",
+        "name": "材质细节图",
+        "size": "2000x2000"
+      },
+      {
+        "type": "selling_point",
+        "name": "卖点图",
+        "size": "2000x2000"
+      },
+      {
+        "type": "size_compare",
+        "name": "尺寸图",
+        "size": "2000x2000"
+      }
+    ],
+    "scene_rules": [
+      "靠墙摆放，旁边有窗户",
+      "自然光线，上午阳光",
+      "现代美国住宅客厅风格",
+      "可包含猫咪互动但不遮挡核心结构"
+    ],
+    "style_rules": [
+      "橙色辅助色",
+      "宠物图标轻量使用",
+      "手绘元素适度点缀"
+    ],
+    "negative_prompts": [
+      "不改变产品材质",
+      "不改变产品结构",
+      "不让猫遮挡核心结构",
+      "不使用深色光照",
+      "不加水印或文字覆盖"
+    ],
+    "checklist": [
+      "产品主体结构完整可识别",
+      "颜色和材质与原图一致",
+      "底座稳固感明确",
+      "无多余文字或水印",
+      "光照自然、阴影合理",
+      "背景干净无杂物干扰",
+      "产品比例正确",
+      "功能部件（猫窝、吊床、抓柱）清晰可见"
+    ],
+    "keyword_bank": [
+      "cat tree",
+      "cat tower",
+      "cat condo",
+      "scratching post",
+      "sisal rope",
+      "plush fabric",
+      "multi-level",
+      "hammock"
+    ],
+    "replaceable_variables": [
+      "${product_name}",
+      "${product_height}",
+      "${product_color}",
+      "${key_feature_1}",
+      "${key_feature_2}"
+    ]
+  },
+  "error": null
+}

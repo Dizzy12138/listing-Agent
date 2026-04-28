@@ -960,6 +960,146 @@ async def get_explore_results(task_id: str):
     return result
 
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Asset Packs & Items
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@app.get("/api/asset-packs")
+async def api_list_packs():
+    from core.services.asset_service import list_packs
+    return {"packs": list_packs()}
+
+
+@app.post("/api/asset-packs/upload")
+async def api_upload_pack(
+    file: UploadFile = File(...),
+    name: str = Form(""),
+    category: str = Form("Pet Supplies,Cat Furniture"),
+    usage: str = Form("listing_info_graph,feature_icon"),
+):
+    """Upload a PDF asset pack and save it."""
+    from core.services.asset_service import create_pack
+    import tempfile, os
+    # Save uploaded file
+    upload_dir = Path("assets/uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    fname = file.filename or "upload.pdf"
+    dest = upload_dir / f"{uuid.uuid4().hex[:8]}_{fname}"
+    with open(dest, "wb") as f:
+        content = await file.read()
+        f.write(content)
+
+    pack_name = name or Path(fname).stem
+    cats = [c.strip() for c in category.split(",") if c.strip()]
+    usages = [u.strip() for u in usage.split(",") if u.strip()]
+    pack = create_pack(pack_name, str(dest), cats, usages)
+    return {"pack": pack.model_dump(), "message": "上传成功，等待解析"}
+
+
+@app.post("/api/asset-packs/{pack_id}/parse")
+async def api_parse_pack(pack_id: str):
+    """Trigger PDF parsing for an asset pack."""
+    from core.services.asset_service import parse_pack, get_pack
+    pack = get_pack(pack_id)
+    if not pack:
+        raise HTTPException(404, "素材包不存在")
+    import threading
+    threading.Thread(target=parse_pack, args=(pack_id,), daemon=True).start()
+    return {"pack_id": pack_id, "status": "parsing"}
+
+
+@app.get("/api/asset-packs/{pack_id}")
+async def api_get_pack(pack_id: str):
+    from core.services.asset_service import get_pack
+    pack = get_pack(pack_id)
+    if not pack:
+        raise HTTPException(404, "素材包不存在")
+    return pack.model_dump()
+
+
+@app.get("/api/asset-packs/{pack_id}/items")
+async def api_list_pack_items(pack_id: str):
+    from core.services.asset_service import list_pack_items
+    return {"items": list_pack_items(pack_id)}
+
+
+@app.patch("/api/asset-items/batch-confirm")
+async def api_batch_confirm_items(body: dict):
+    from core.services.asset_service import batch_update_items
+    ids = body.get("asset_item_ids", [])
+    status = body.get("status", "confirmed")
+    updated = batch_update_items(ids, status=status)
+    return {"updated": len(updated), "items": updated}
+
+
+@app.patch("/api/asset-items/batch-disable")
+async def api_batch_disable_items(body: dict):
+    from core.services.asset_service import batch_update_items
+    ids = body.get("asset_item_ids", [])
+    updated = batch_update_items(ids, status="disabled")
+    return {"updated": len(updated), "items": updated}
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Knowledge Docs
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+@app.get("/api/knowledge-docs")
+async def api_list_docs():
+    from core.services.asset_service import list_docs
+    return {"docs": list_docs()}
+
+
+@app.post("/api/knowledge-docs/upload")
+async def api_upload_doc(
+    file: UploadFile = File(...),
+    name: str = Form(""),
+    name_en: str = Form(""),
+    category: str = Form("Pet Supplies,Cat Furniture"),
+):
+    from core.services.asset_service import create_doc
+    upload_dir = Path("assets/uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    fname = file.filename or "upload.pdf"
+    dest = upload_dir / f"{uuid.uuid4().hex[:8]}_{fname}"
+    with open(dest, "wb") as f:
+        content = await file.read()
+        f.write(content)
+    doc_name = name or Path(fname).stem
+    cats = [c.strip() for c in category.split(",") if c.strip()]
+    doc = create_doc(doc_name, str(dest), cats, name_en=name_en)
+    return {"doc": doc.model_dump(), "message": "上传成功，等待解析"}
+
+
+@app.get("/api/knowledge-docs/{doc_id}")
+async def api_get_doc(doc_id: str):
+    from core.services.asset_service import get_doc
+    doc = get_doc(doc_id)
+    if not doc:
+        raise HTTPException(404, "文档不存在")
+    return doc.model_dump()
+
+
+@app.get("/api/knowledge-docs/{doc_id}/summary")
+async def api_get_doc_summary(doc_id: str):
+    from core.services.asset_service import get_doc
+    doc = get_doc(doc_id)
+    if not doc:
+        raise HTTPException(404, "文档不存在")
+    return {"doc_id": doc_id, "summary": doc.summary, "knowledge": doc.parsed_knowledge}
+
+
+@app.post("/api/knowledge-docs/{doc_id}/analyze")
+async def api_analyze_doc(doc_id: str):
+    from core.services.asset_service import analyze_doc, get_doc
+    doc = get_doc(doc_id)
+    if not doc:
+        raise HTTPException(404, "文档不存在")
+    import threading
+    threading.Thread(target=analyze_doc, args=(doc_id,), daemon=True).start()
+    return {"doc_id": doc_id, "status": "parsing"}
+
+
 @app.get("/api/models")
 async def list_models():
     """获取可用模型列表"""
