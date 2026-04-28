@@ -1,0 +1,70 @@
+{
+  "doc_id": "doc_a7e0465f",
+  "name": "测试猫爬架模板",
+  "name_en": "Test Cat Tree Template",
+  "category": [
+    "Pet Supplies",
+    "Cat Furniture"
+  ],
+  "file_type": "txt",
+  "source_file": "assets/uploads/dc80b115_test_template.txt",
+  "upload_time": "2026-04-28T17:14:09",
+  "parse_status": "parsed",
+  "summary": "关于猫爬架(Cat Tree/Cat Tower)亚马逊Listing图片生成的规范文档，涵盖全局一致性要求、场景布置规则、反向提示词以及详细的图像质检清单。",
+  "rule_count": 8,
+  "checklist_count": 8,
+  "linked_sku_count": 0,
+  "parsed_knowledge": {
+    "category_path": "Pet Supplies > Cat Supplies > Cat Furniture > Cat Tree / Cat Tower",
+    "summary": "关于猫爬架(Cat Tree/Cat Tower)亚马逊Listing图片生成的规范文档，涵盖全局一致性要求、场景布置规则、反向提示词以及详细的图像质检清单。",
+    "applicable_products": [
+      "Cat Tree",
+      "Cat Tower"
+    ],
+    "global_rules": [
+      "Keep the product structure, proportion, color, material and functional parts consistent",
+      "Do not redesign the product appearance",
+      "White background images must show the complete product",
+      "Scene images must show the product in a real home environment"
+    ],
+    "image_plan_templates": [],
+    "prompt_templates": [],
+    "scene_rules": [
+      "Place against a wall, with a visible window nearby",
+      "Natural lighting, morning sunlight",
+      "Modern American residential living room style",
+      "Can include cat interaction but do not obstruct core structure"
+    ],
+    "style_rules": [],
+    "negative_prompts": [
+      "Do not change the product material",
+      "Do not change the product structure",
+      "Do not let cats obstruct the core structure",
+      "Do not use dark lighting",
+      "Do not add watermarks"
+    ],
+    "checklist": [
+      "Product main structure is complete and identifiable",
+      "Color and material match the original",
+      "Base shows stability",
+      "No extra text or watermarks",
+      "Natural lighting and reasonable shadows",
+      "Clean background without clutter",
+      "Correct product proportions",
+      "Functional parts (cat house, hammock, scratching post) clearly visible"
+    ],
+    "keyword_bank": [
+      "Cat Tree",
+      "Cat Tower",
+      "Modern American residential living room",
+      "morning sunlight",
+      "natural lighting",
+      "cat interaction",
+      "cat house",
+      "hammock",
+      "scratching post"
+    ],
+    "replaceable_variables": []
+  },
+  "error": "Request timed out."
+}

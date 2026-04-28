@@ -1,0 +1,32 @@
+Cat Tree Amazon Listing Image Template
+
+Category: Pet Supplies > Cat Supplies > Cat Furniture > Cat Tree / Cat Tower
+
+Global Rules:
+1. Keep the product structure, proportion, color, material and functional parts consistent
+2. Do not redesign the product appearance
+3. White background images must show the complete product
+4. Scene images must show the product in a real home environment
+
+Scene Rules:
+1. Place against a wall, with a visible window nearby
+2. Natural lighting, morning sunlight
+3. Modern American residential living room style
+4. Can include cat interaction but do not obstruct core structure
+
+Negative Prompts:
+- Do not change the product material
+- Do not change the product structure  
+- Do not let cats obstruct the core structure
+- Do not use dark lighting
+- Do not add watermarks
+
+Quality Checklist:
+- Product main structure is complete and identifiable
+- Color and material match the original
+- Base shows stability
+- No extra text or watermarks
+- Natural lighting and reasonable shadows
+- Clean background without clutter
+- Correct product proportions
+- Functional parts (cat house, hammock, scratching post) clearly visible

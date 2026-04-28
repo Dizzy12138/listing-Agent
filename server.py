@@ -23,6 +23,7 @@ app = FastAPI(title="电商批量生图平台", version="1.0.0")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/output", StaticFiles(directory="output"), name="output")
 app.mount("/products", StaticFiles(directory="products"), name="products")
+app.mount("/assets", StaticFiles(directory="assets"), name="assets")
 
 # 任务存储 (PoC 阶段用内存，后续可换 Redis/DB)
 tasks: dict = {}

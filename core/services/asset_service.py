@@ -1,10 +1,11 @@
 """
 Asset management service — PDF parsing, icon extraction, pack/item CRUD.
-PoC: uses in-memory store + filesystem. Production: switch to DB.
+Uses PyMuPDF for real PDF image extraction and LLM for document analysis.
 """
 import json
 import uuid
 import shutil
+import traceback
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -15,7 +16,7 @@ from core.schemas.asset_pack import AssetPack, AssetItem, KnowledgeDoc
 ASSET_DIR = Path("assets")
 ASSET_DIR.mkdir(exist_ok=True)
 
-# ── In-memory stores (PoC) ──
+# ── In-memory stores ──
 _packs: dict[str, AssetPack] = {}
 _items: dict[str, AssetItem] = {}
 _docs: dict[str, KnowledgeDoc] = {}
@@ -44,7 +45,6 @@ def create_pack(name: str, file_path: str, category: list[str],
         created_at=_now(),
         updated_at=_now(),
     )
-    # Store file
     pack_dir = ASSET_DIR / "packs" / pack_id
     pack_dir.mkdir(parents=True, exist_ok=True)
     if Path(file_path).exists():
@@ -66,7 +66,7 @@ def get_pack(pack_id: str) -> Optional[AssetPack]:
 
 
 def parse_pack(pack_id: str) -> AssetPack:
-    """Parse a PDF pack into individual asset items (mock/OCR)."""
+    """Parse a PDF pack into individual asset items."""
     pack = get_pack(pack_id)
     if not pack:
         raise ValueError(f"Pack {pack_id} not found")
@@ -84,6 +84,7 @@ def parse_pack(pack_id: str) -> AssetPack:
         pack.parse_status = "error"
         pack.error = str(e)
         pack.updated_at = _now()
+        traceback.print_exc()
 
     _save_pack_meta(pack)
     return pack
@@ -91,90 +92,166 @@ def parse_pack(pack_id: str) -> AssetPack:
 
 def _extract_items_from_pdf(pack: AssetPack) -> list[AssetItem]:
     """
-    Extract asset items from a PDF. 
-    PoC: generates mock items. Production: use pdf2image + OCR + VLM.
+    Extract images from PDF using pypdf, then use VLM to label each.
     """
     pack_dir = ASSET_DIR / "packs" / pack.asset_pack_id
     items_dir = pack_dir / "items"
     items_dir.mkdir(exist_ok=True)
 
-    # Try real PDF parsing first
+    # Find the PDF file
+    source = None
+    for f in pack_dir.iterdir():
+        if f.suffix.lower() == ".pdf":
+            source = f
+            break
+    if source is None:
+        sf = Path(pack.source_file)
+        if sf.exists():
+            source = sf
+    if source is None:
+        raise FileNotFoundError(f"No PDF found for pack {pack.asset_pack_id}")
+
     extracted = []
-    source = pack_dir / Path(pack.source_file).name
-    page_count = 1
+    print(f"  [AssetParse] 开始解析 PDF: {source.name}")
 
-    if source.exists() and source.suffix.lower() == ".pdf":
-        try:
-            page_count = _count_pdf_pages(source)
-        except Exception:
-            page_count = 1
+    from pypdf import PdfReader
+    from PIL import Image
+    import io
 
-    pack.page_count = page_count
+    reader = PdfReader(str(source))
+    pack.page_count = len(reader.pages)
+    print(f"  [AssetParse] PDF 共 {len(reader.pages)} 页")
 
-    # For PoC: generate mock items based on common icon categories
-    mock_icons = [
-        ("cat_icon", "猫图标", "icon", ["cat", "pet", "animal"]),
-        ("cat_tree_icon", "猫树图标", "icon", ["cat tree", "furniture", "tower"]),
-        ("arrow_up", "向上箭头", "icon", ["arrow", "direction", "up"]),
-        ("arrow_down", "向下箭头", "icon", ["arrow", "direction", "down"]),
-        ("checkmark", "勾选图标", "icon", ["check", "confirm", "yes"]),
-        ("star_rating", "星级评分", "icon", ["star", "rating", "quality"]),
-        ("paw_print", "爪印图标", "icon", ["paw", "pet", "cat"]),
-        ("heart_icon", "爱心图标", "icon", ["heart", "love", "care"]),
-        ("sisal_rope_icon", "剑麻绳图标", "icon", ["sisal", "rope", "material"]),
-        ("stability_icon", "稳定性图标", "icon", ["stability", "secure", "base"]),
-        ("size_icon", "尺寸标注", "graphic", ["size", "dimension", "measure"]),
-        ("hammock_icon", "吊床图标", "icon", ["hammock", "rest", "comfort"]),
-        ("condo_icon", "猫窝图标", "icon", ["condo", "house", "shelter"]),
-        ("scratch_board", "抓板图标", "icon", ["scratch", "board", "play"]),
-        ("multi_level", "多层图标", "icon", ["level", "tier", "multi"]),
-        ("decorative_line", "装饰线条", "decoration", ["line", "border", "decorative"]),
-        ("info_frame", "信息框", "graphic", ["frame", "info", "layout"]),
-        ("brand_badge", "品牌标志", "logo", ["brand", "badge", "logo"]),
-    ]
+    img_index = 0
+    for page_num, page in enumerate(reader.pages):
+        # Extract embedded images from each page
+        if hasattr(page, 'images'):
+            for img_obj in page.images:
+                try:
+                    img_data = img_obj.data
+                    img = Image.open(io.BytesIO(img_data))
+                    # Skip tiny images
+                    if img.width < 20 or img.height < 20:
+                        continue
+                    # Convert to RGB if needed
+                    if img.mode not in ("RGB", "RGBA"):
+                        img = img.convert("RGBA")
 
-    for i, (key, name, item_type, tags) in enumerate(mock_icons):
-        item_id = f"item_{pack.asset_pack_id}_{i:03d}"
-        item = AssetItem(
-            asset_item_id=item_id,
-            asset_pack_id=pack.asset_pack_id,
-            name=name,
-            type=item_type,
-            tags=tags,
-            bbox=[50 + (i % 5) * 120, 50 + (i // 5) * 120, 80, 80],
-            page=min(i // 6 + 1, page_count),
-            preview_url=f"/assets/packs/{pack.asset_pack_id}/items/{item_id}.png",
-            applicable_image_types=["listing_info_graph", "feature_icon"],
-            status="available",
-            created_at=_now(),
-        )
-        _items[item_id] = item
-        extracted.append(item)
+                    item_id = f"item_{pack.asset_pack_id}_{img_index:03d}"
+                    img_filename = f"{item_id}.png"
+                    img_path = items_dir / img_filename
+                    img.save(str(img_path), "PNG")
+
+                    item = AssetItem(
+                        asset_item_id=item_id,
+                        asset_pack_id=pack.asset_pack_id,
+                        name=f"素材_{img_index+1} (p{page_num+1})",
+                        type=_guess_type_by_size(img.width, img.height),
+                        tags=[],
+                        bbox=[0, 0, img.width, img.height],
+                        page=page_num + 1,
+                        preview_url=f"/assets/packs/{pack.asset_pack_id}/items/{img_filename}",
+                        png_url=f"/assets/packs/{pack.asset_pack_id}/items/{img_filename}",
+                        applicable_image_types=pack.usage,
+                        status="available",
+                        created_at=_now(),
+                    )
+                    _items[item_id] = item
+                    extracted.append(item)
+                    img_index += 1
+                except Exception as e:
+                    print(f"  [AssetParse] 跳过图片: {e}")
+                    continue
+
+    # If no embedded images found, extract text per page as fallback
+    if not extracted:
+        print(f"  [AssetParse] 无嵌入图片，提取页面文本")
+        for page_num, page in enumerate(reader.pages):
+            text = page.extract_text() or ""
+            if text.strip():
+                item_id = f"item_{pack.asset_pack_id}_{page_num:03d}"
+                item = AssetItem(
+                    asset_item_id=item_id,
+                    asset_pack_id=pack.asset_pack_id,
+                    name=f"页面_{page_num+1}",
+                    type="graphic",
+                    tags=[],
+                    bbox=[0, 0, 0, 0],
+                    page=page_num + 1,
+                    description=text[:200],
+                    applicable_image_types=pack.usage,
+                    status="available",
+                    created_at=_now(),
+                )
+                _items[item_id] = item
+                extracted.append(item)
+
+    print(f"  [AssetParse] 提取到 {len(extracted)} 个素材项")
+
+    # Use VLM to auto-label items that have preview images
+    _label_items_with_vlm(extracted, items_dir)
 
     # Save items metadata
     items_meta = [it.model_dump() for it in extracted]
     (pack_dir / "items.json").write_text(
         json.dumps(items_meta, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-
     return extracted
 
 
-def _count_pdf_pages(pdf_path: Path) -> int:
-    """Count pages in a PDF file."""
+def _guess_type_by_size(w: int, h: int) -> str:
+    area = w * h
+    if area < 10000:
+        return "icon"
+    elif area < 100000:
+        return "graphic"
+    else:
+        return "background"
+
+
+def _label_items_with_vlm(items: list[AssetItem], items_dir: Path):
+    """Use VLM to auto-label extracted items with names and tags."""
+    if not items:
+        return
     try:
-        import fitz  # PyMuPDF
-        doc = fitz.open(str(pdf_path))
-        count = len(doc)
-        doc.close()
-        return count
+        from models.llm import chat
+        from PIL import Image
     except ImportError:
-        # Fallback: try to count pages from PDF header
+        print("  [AssetParse] VLM labeling 不可用，跳过")
+        return
+
+    for item in items:
+        img_path = items_dir / f"{item.asset_item_id}.png"
+        if not img_path.exists():
+            continue
         try:
-            content = pdf_path.read_bytes()
-            return content.count(b"/Type /Page") - content.count(b"/Type /Pages")
-        except Exception:
-            return 1
+            img = Image.open(img_path)
+            if img.width > 2000 or img.height > 2000:
+                img.thumbnail((1000, 1000))
+
+            prompt = """请分析这张图片，返回JSON格式：
+{
+  "name": "图片的简短中文名称（如：猫图标、箭头、尺寸线、产品场景图等）",
+  "type": "icon / graphic / background / decoration / logo 之一",
+  "tags": ["标签1", "标签2", "标签3"],
+  "description": "一句话描述图片内容"
+}
+只返回JSON，不要其他文本。"""
+            result = chat(prompt, image=img, response_format="json")
+            data = json.loads(result)
+            if data.get("name"):
+                item.name = data["name"]
+            if data.get("type"):
+                item.type = data["type"]
+            if data.get("tags"):
+                item.tags = data["tags"]
+            if data.get("description"):
+                item.description = data["description"]
+            print(f"    VLM: {item.asset_item_id} → {item.name} [{item.type}]")
+        except Exception as e:
+            print(f"    VLM labeling 失败 {item.asset_item_id}: {e}")
+            continue
+
 
 
 def list_pack_items(pack_id: str) -> list[dict]:
@@ -198,7 +275,24 @@ def batch_update_items(item_ids: list[str], status: str = None,
         if tags is not None:
             item.tags = tags
         updated.append(item.model_dump())
+
+    # Persist changes to disk
+    pack_ids = set(it.get("asset_pack_id") for it in updated if it.get("asset_pack_id"))
+    for pid in pack_ids:
+        _persist_pack_items(pid)
+
     return updated
+
+
+def _persist_pack_items(pack_id: str):
+    """Save current item state to disk."""
+    pack_dir = ASSET_DIR / "packs" / pack_id
+    if not pack_dir.exists():
+        return
+    all_items = [it.model_dump() for it in _items.values() if it.asset_pack_id == pack_id]
+    (pack_dir / "items.json").write_text(
+        json.dumps(all_items, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -208,11 +302,13 @@ def batch_update_items(item_ids: list[str], status: str = None,
 def create_doc(name: str, file_path: str, category: list[str],
                name_en: str = "") -> KnowledgeDoc:
     doc_id = f"doc_{uuid.uuid4().hex[:8]}"
+    file_type = Path(file_path).suffix.lstrip(".").lower() or "pdf"
     doc = KnowledgeDoc(
         doc_id=doc_id,
         name=name,
         name_en=name_en,
         category=category,
+        file_type=file_type,
         source_file=file_path,
         upload_time=_now(),
         parse_status="pending",
@@ -238,7 +334,7 @@ def get_doc(doc_id: str) -> Optional[KnowledgeDoc]:
 
 
 def analyze_doc(doc_id: str) -> KnowledgeDoc:
-    """Analyze a knowledge document and extract structured rules."""
+    """Analyze a knowledge document: extract text, then use LLM to parse rules."""
     doc = get_doc(doc_id)
     if not doc:
         raise ValueError(f"Doc {doc_id} not found")
@@ -247,79 +343,119 @@ def analyze_doc(doc_id: str) -> KnowledgeDoc:
     _save_doc_meta(doc)
 
     try:
-        knowledge = _extract_knowledge(doc)
+        knowledge = _extract_knowledge_real(doc)
         doc.parsed_knowledge = knowledge
-        doc.rule_count = len(knowledge.get("global_rules", []))
+        doc.rule_count = (
+            len(knowledge.get("global_rules", []))
+            + len(knowledge.get("scene_rules", []))
+            + len(knowledge.get("style_rules", []))
+        )
         doc.checklist_count = len(knowledge.get("checklist", []))
         doc.parse_status = "parsed"
         doc.summary = knowledge.get("summary", "")
     except Exception as e:
         doc.parse_status = "error"
         doc.error = str(e)
+        traceback.print_exc()
 
     _save_doc_meta(doc)
     return doc
 
 
-def _extract_knowledge(doc: KnowledgeDoc) -> dict:
-    """
-    Extract structured knowledge from a document.
-    PoC: returns mock knowledge. Production: use VLM + LLM.
-    """
-    return {
-        "category_path": "Pet Supplies > Cat Supplies > Cat Furniture > Cat Tree / Cat Tower / Cat Condo",
-        "summary": "Amazon猫爬架品类上货图生成模板，包含全局规则、场景要求、负面提示词和检查清单。",
-        "applicable_products": [],
-        "global_rules": [
-            "保持产品结构、比例、颜色、材质、功能部件一致",
-            "不要重设计产品外观",
-            "白底图需完整展示产品全貌",
-            "场景图需体现产品在真实家居中的使用场景",
-        ],
-        "image_plan_templates": [
-            {"type": "hero_scene", "name": "首图", "size": "2000x2000"},
-            {"type": "lifestyle_scene", "name": "场景图", "size": "2000x2000"},
-            {"type": "material_detail", "name": "材质细节图", "size": "2000x2000"},
-            {"type": "selling_point", "name": "卖点图", "size": "2000x2000"},
-            {"type": "size_compare", "name": "尺寸图", "size": "2000x2000"},
-        ],
-        "scene_rules": [
-            "靠墙摆放，旁边有窗户",
-            "自然光线，上午阳光",
-            "现代美国住宅客厅风格",
-            "可包含猫咪互动但不遮挡核心结构",
-        ],
-        "style_rules": [
-            "橙色辅助色",
-            "宠物图标轻量使用",
-            "手绘元素适度点缀",
-        ],
-        "negative_prompts": [
-            "不改变产品材质",
-            "不改变产品结构",
-            "不让猫遮挡核心结构",
-            "不使用深色光照",
-            "不加水印或文字覆盖",
-        ],
-        "checklist": [
-            "产品主体结构完整可识别",
-            "颜色和材质与原图一致",
-            "底座稳固感明确",
-            "无多余文字或水印",
-            "光照自然、阴影合理",
-            "背景干净无杂物干扰",
-            "产品比例正确",
-            "功能部件（猫窝、吊床、抓柱）清晰可见",
-        ],
-        "keyword_bank": [
-            "cat tree", "cat tower", "cat condo", "scratching post",
-            "sisal rope", "plush fabric", "multi-level", "hammock",
-        ],
-        "replaceable_variables": [
-            "${product_name}", "${product_height}", "${product_color}",
-            "${key_feature_1}", "${key_feature_2}",
-        ],
-    }
+def _extract_text_from_file(doc: KnowledgeDoc) -> str:
+    """Extract text content from the uploaded file."""
+    doc_dir = ASSET_DIR / "docs" / doc.doc_id
+    source = None
+    for f in doc_dir.iterdir():
+        if f.suffix.lower() in (".pdf", ".docx", ".doc", ".txt", ".md"):
+            source = f
+            break
+    if source is None:
+        sf = Path(doc.source_file)
+        if sf.exists():
+            source = sf
+    if source is None:
+        return ""
+
+    ext = source.suffix.lower()
+    text = ""
+
+    if ext == ".pdf":
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(str(source))
+            for page in reader.pages:
+                text += (page.extract_text() or "") + "\n"
+        except ImportError:
+            text = f"[PDF文件: {source.name}, 需要安装 pypdf]"
+
+    elif ext in (".docx",):
+        try:
+            from docx import Document
+            doc_file = Document(str(source))
+            for para in doc_file.paragraphs:
+                text += para.text + "\n"
+        except ImportError:
+            text = f"[DOCX文件: {source.name}, 需要安装 python-docx 才能提取文本]"
+
+    elif ext in (".txt", ".md"):
+        text = source.read_text(encoding="utf-8", errors="ignore")
+
+    return text.strip()
+
+
+def _extract_knowledge_real(doc: KnowledgeDoc) -> dict:
+    """Extract structured knowledge using real text extraction + LLM analysis."""
+    print(f"  [KnowledgeAnalyze] 开始解析文档: {doc.name}")
+
+    text = _extract_text_from_file(doc)
+    if not text:
+        print(f"  [KnowledgeAnalyze] 文档内容为空")
+        return {"summary": "文档内容为空或无法提取", "global_rules": [], "checklist": []}
+
+    # Truncate to avoid token limits (keep first ~8000 chars)
+    if len(text) > 8000:
+        text = text[:8000] + "\n...[截断]"
+
+    print(f"  [KnowledgeAnalyze] 提取到 {len(text)} 字符文本，调用 LLM 分析")
+
+    prompt = f"""请分析以下电商产品文档，提取结构化的图片生成知识。
+
+文档内容：
+---
+{text}
+---
+
+请返回JSON格式，包含以下字段（每个字段为数组，如果文档中没有相关内容则返回空数组）：
+
+{{
+  "category_path": "品类路径，如 Pet Supplies > Cat Supplies > Cat Furniture > Cat Tree",
+  "summary": "文档内容一句话摘要",
+  "applicable_products": ["适用的产品类型"],
+  "global_rules": ["全局生图规则，如：保持产品结构一致"],
+  "image_plan_templates": [{{"type": "hero_scene", "name": "首图", "size": "2000x2000"}}],
+  "prompt_templates": ["可复用的提示词模板"],
+  "scene_rules": ["场景图拍摄/生成规则"],
+  "style_rules": ["风格规则，如配色、字体、图标使用"],
+  "negative_prompts": ["不要做的事情，如：不改变材质"],
+  "checklist": ["质检清单项"],
+  "keyword_bank": ["关键词"],
+  "replaceable_variables": ["可替换变量如 ${{product_name}}"]
+}}
+
+只返回JSON，不要其他文本。"""
+
+    try:
+        from models.llm import chat
+        result = chat(prompt, response_format="json")
+        knowledge = json.loads(result)
+        print(f"  [KnowledgeAnalyze] LLM 返回结构化知识: "
+              f"{len(knowledge.get('global_rules',[]))} rules, "
+              f"{len(knowledge.get('checklist',[]))} checklist items")
+        return knowledge
+    except Exception as e:
+        print(f"  [KnowledgeAnalyze] LLM 分析失败: {e}")
+        raise
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -376,53 +512,14 @@ def _load_all_docs():
                 _docs[did] = KnowledgeDoc(**data)
 
 
-# ── Seed mock data on first import ──
-def _seed_mock_data():
-    """Seed demo data so the UI has something to show."""
-    if list_packs():
-        return
+# ── Seed demo data only if no data exists on disk ──
+def _seed_if_empty():
+    """Seed one demo doc so the knowledge base has something to show."""
+    _load_all_docs()
+    _load_all_packs()
+    if _docs or _packs:
+        return  # Already have real data
 
-    # Mock asset pack
-    pack = AssetPack(
-        asset_pack_id="pack_demo01",
-        name="Feandrea listing图标集",
-        type="icon_pack_pdf",
-        file_type="pdf",
-        category=["Pet Supplies", "Cat Furniture"],
-        usage=["listing_info_graph", "feature_icon"],
-        parse_status="parsed",
-        page_count=10,
-        item_count=18,
-        tags=["feandrea", "icons", "listing"],
-        created_at=_now(),
-        updated_at=_now(),
-    )
-    _packs[pack.asset_pack_id] = pack
-    _save_pack_meta(pack)
-
-    # Mock items for the pack
-    mock_icons = [
-        ("猫图标", "icon", ["cat", "pet"]),
-        ("猫树图标", "icon", ["cat tree", "tower"]),
-        ("爪印图标", "icon", ["paw", "pet"]),
-        ("向上箭头", "icon", ["arrow", "up"]),
-        ("勾选图标", "icon", ["check", "confirm"]),
-        ("稳定性图标", "icon", ["stability", "base"]),
-        ("吊床图标", "icon", ["hammock", "rest"]),
-        ("剑麻绳图标", "icon", ["sisal", "rope"]),
-    ]
-    for i, (name, itype, tags) in enumerate(mock_icons):
-        item = AssetItem(
-            asset_item_id=f"item_demo_{i:03d}",
-            asset_pack_id="pack_demo01",
-            name=name, type=itype, tags=tags,
-            bbox=[50 + i * 100, 50, 80, 80], page=1,
-            status="confirmed" if i < 5 else "available",
-            created_at=_now(),
-        )
-        _items[item.asset_item_id] = item
-
-    # Mock knowledge doc
     doc = KnowledgeDoc(
         doc_id="doc_demo01",
         name="猫爬架 Amazon 上货图通用提示词模板",
@@ -435,12 +532,36 @@ def _seed_mock_data():
         rule_count=12,
         checklist_count=8,
         linked_sku_count=1,
-        parsed_knowledge=_extract_knowledge(doc=KnowledgeDoc(
-            doc_id="", name="", category=[]
-        )),
+        parsed_knowledge={
+            "category_path": "Pet Supplies > Cat Supplies > Cat Furniture > Cat Tree / Cat Tower",
+            "summary": "Amazon猫爬架品类上货图生成模板",
+            "global_rules": [
+                "保持产品结构、比例、颜色、材质、功能部件一致",
+                "不要重设计产品外观",
+                "白底图需完整展示产品全貌",
+                "场景图需体现产品在真实家居中的使用场景",
+            ],
+            "scene_rules": [
+                "靠墙摆放，旁边有窗户",
+                "自然光线，上午阳光",
+                "现代美国住宅客厅风格",
+            ],
+            "style_rules": ["橙色辅助色", "宠物图标轻量使用"],
+            "negative_prompts": [
+                "不改变产品材质", "不改变产品结构",
+                "不让猫遮挡核心结构", "不使用深色光照",
+            ],
+            "checklist": [
+                "产品主体结构完整可识别", "颜色和材质与原图一致",
+                "底座稳固感明确", "无多余文字或水印",
+                "光照自然、阴影合理", "产品比例正确",
+                "功能部件清晰可见", "背景干净无杂物",
+            ],
+            "keyword_bank": ["cat tree", "cat tower", "scratching post", "sisal"],
+        },
     )
     _docs[doc.doc_id] = doc
     _save_doc_meta(doc)
 
 
-_seed_mock_data()
+_seed_if_empty()
