@@ -973,27 +973,46 @@ async def api_list_packs():
 
 @app.post("/api/asset-packs/upload")
 async def api_upload_pack(
-    file: UploadFile = File(...),
+    file: list[UploadFile] = File(...),
     name: str = Form(""),
     category: str = Form("Pet Supplies,Cat Furniture"),
     usage: str = Form("listing_info_graph,feature_icon"),
 ):
-    """Upload a PDF asset pack and save it."""
+    """Upload asset pack files (PDF, PNG, JPG, etc.) and save."""
     from core.services.asset_service import create_pack
-    import tempfile, os
-    # Save uploaded file
+
     upload_dir = Path("assets/uploads")
     upload_dir.mkdir(parents=True, exist_ok=True)
-    fname = file.filename or "upload.pdf"
-    dest = upload_dir / f"{uuid.uuid4().hex[:8]}_{fname}"
-    with open(dest, "wb") as f:
-        content = await file.read()
-        f.write(content)
 
-    pack_name = name or Path(fname).stem
+    saved_files = []
+    file_types = set()
+    for f in file:
+        fname = f.filename or "upload"
+        ext = Path(fname).suffix.lower()
+        dest = upload_dir / f"{uuid.uuid4().hex[:8]}_{fname}"
+        with open(dest, "wb") as out:
+            content = await f.read()
+            out.write(content)
+        saved_files.append(str(dest))
+        if ext == ".pdf":
+            file_types.add("pdf")
+        elif ext in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".svg"):
+            file_types.add("image")
+        else:
+            file_types.add("other")
+
+    # Determine pack type
+    if "pdf" in file_types:
+        ftype = "pdf"
+    elif "image" in file_types:
+        ftype = "image"
+    else:
+        ftype = "other"
+
+    pack_name = name or Path(saved_files[0]).stem
     cats = [c.strip() for c in category.split(",") if c.strip()]
     usages = [u.strip() for u in usage.split(",") if u.strip()]
-    pack = create_pack(pack_name, str(dest), cats, usages)
+    pack = create_pack(pack_name, saved_files, cats, usages, file_type=ftype)
     return {"pack": pack.model_dump(), "message": "上传成功，等待解析"}
 
 

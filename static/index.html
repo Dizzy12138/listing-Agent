@@ -185,12 +185,12 @@
 <!-- Upload Pack Modal -->
 <div class="modal-overlay" id="uploadPackModal">
     <div class="modal">
-        <div class="modal-header"><h2>上传 PDF 素材包</h2><button class="modal-close" onclick="closeModal('uploadPackModal')">✕</button></div>
+        <div class="modal-header"><h2>上传素材包</h2><button class="modal-close" onclick="closeModal('uploadPackModal')">✕</button></div>
         <div class="modal-body">
             <form onsubmit="handlePackUpload(event)">
                 <div class="form-grid">
-                    <div class="form-group full"><label class="form-label">PDF 文件 *</label>
-                        <div class="upload-zone"><div class="icon">📄</div><div class="text">拖拽 PDF 到此处，或 <strong>点击上传</strong></div><input type="file" name="file" accept=".pdf" required></div>
+                    <div class="form-group full"><label class="form-label">文件 *（支持 PDF / PNG / JPG / SVG / WebP）</label>
+                        <div class="upload-zone"><div class="icon">📎</div><div class="text">拖拽文件到此处，或 <strong>点击上传</strong></div><input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.svg,.webp,.gif,.bmp,.tiff" multiple required></div>
                     </div>
                     <div class="form-group"><label class="form-label">素材包名称</label><input class="form-input" name="name" placeholder="如 Feandrea listing图标集"></div>
                     <div class="form-group"><label class="form-label">适用品类</label><input class="form-input" name="category" value="Pet Supplies,Cat Furniture"></div>

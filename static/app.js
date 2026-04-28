@@ -326,7 +326,7 @@ async function renderAssets() {
     try { const r = await fetch('/api/asset-packs'); assetPacks = (await r.json()).packs || []; } catch { assetPacks = []; }
     area.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <div style="font-size:15px;font-weight:600">素材包管理</div>
-        <div style="display:flex;gap:8px"><button class="btn btn-primary btn-sm" onclick="openModal('uploadPackModal')">📄 上传PDF素材包</button></div>
+        <div style="display:flex;gap:8px"><button class="btn btn-primary btn-sm" onclick="openModal('uploadPackModal')">📎 上传素材包</button></div>
     </div>
     <table class="data-table"><thead><tr><th>素材包名称</th><th>类型</th><th>品类</th><th>页数</th><th>素材项</th><th>状态</th><th>操作</th></tr></thead><tbody>
     ${assetPacks.map(p => `<tr>
@@ -358,8 +358,8 @@ async function viewPackItems(packId) {
         </div>
     </div>
     <div class="asset-grid">${items.map(it => `<div class="asset-thumb" data-item-id="${it.asset_item_id}" onclick="this.classList.toggle('selected')" style="border:2px solid ${it.status==='confirmed'?'var(--success)':it.status==='disabled'?'var(--danger)':'var(--border)'}">
-        <div class="asset-thumb-img">${it.type==='icon'?'🏷':'🎨'}</div>
-        <div class="asset-thumb-label"><strong>${it.name}</strong><br><span style="font-size:10px;color:var(--text-muted)">${it.tags.join(', ')}</span><br><span class="tag ${it.status==='confirmed'?'tag-green':it.status==='disabled'?'tag-red':'tag-yellow'}" style="margin-top:2px">${it.status}</span></div>
+        <div class="asset-thumb-img">${it.preview_url ? '<img src="'+it.preview_url+'" style="width:100%;height:100%;object-fit:contain;">' : (it.type==='icon'?'🏷':'🎨')}</div>
+        <div class="asset-thumb-label"><strong>${it.name}</strong><br><span style="font-size:10px;color:var(--text-muted)">${(it.tags||[]).join(', ')}</span><br><span class="tag ${it.status==='confirmed'?'tag-green':it.status==='disabled'?'tag-red':'tag-yellow'}" style="margin-top:2px">${it.status}</span></div>
     </div>`).join('')}</div>`;
 }
 async function batchConfirmItems(packId) {
@@ -376,14 +376,24 @@ async function batchDisableItems(packId) {
 }
 async function handlePackUpload(e) {
     e.preventDefault();
-    const fd = new FormData(e.target);
+    const form = e.target;
+    const files = form.querySelector('input[type=file]').files;
+    if (!files.length) { toast('请选择文件','info'); return; }
+    const fd = new FormData();
+    // Support multiple files — send all as 'file' entries
+    for (const f of files) fd.append('file', f);
+    fd.append('name', form.querySelector('input[name=name]')?.value || '');
+    fd.append('category', form.querySelector('input[name=category]')?.value || '');
+    fd.append('usage', form.querySelector('input[name=usage]')?.value || '');
     try {
         const r = await fetch('/api/asset-packs/upload',{method:'POST',body:fd});
+        if (!r.ok) { const t = await r.text(); throw new Error(t); }
         const d = await r.json();
         closeModal('uploadPackModal');
+        form.reset();
         toast('素材包上传成功，开始解析...','success');
         await fetch('/api/asset-packs/'+d.pack.asset_pack_id+'/parse',{method:'POST'});
-        setTimeout(renderAssets, 2000);
+        setTimeout(renderAssets, 3000);
     } catch(err) { toast('上传失败: '+err.message,'error'); }
 }
 

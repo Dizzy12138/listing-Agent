@@ -30,8 +30,11 @@ def _now() -> str:
 # Asset Packs
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def create_pack(name: str, file_path: str, category: list[str],
+def create_pack(name: str, file_paths, category: list[str],
                 usage: list[str], file_type: str = "pdf") -> AssetPack:
+    """Create a new asset pack from uploaded files (list or single path)."""
+    if isinstance(file_paths, str):
+        file_paths = [file_paths]
     pack_id = f"pack_{uuid.uuid4().hex[:8]}"
     pack = AssetPack(
         asset_pack_id=pack_id,
@@ -39,16 +42,18 @@ def create_pack(name: str, file_path: str, category: list[str],
         file_type=file_type,
         category=category,
         usage=usage,
-        source_file=file_path,
-        source_file_url=f"/assets/packs/{pack_id}/{Path(file_path).name}",
+        source_file=file_paths[0] if file_paths else "",
+        source_file_url=f"/assets/packs/{pack_id}/",
         parse_status="pending",
         created_at=_now(),
         updated_at=_now(),
     )
     pack_dir = ASSET_DIR / "packs" / pack_id
     pack_dir.mkdir(parents=True, exist_ok=True)
-    if Path(file_path).exists():
-        shutil.copy2(file_path, pack_dir / Path(file_path).name)
+    for fp in file_paths:
+        p = Path(fp)
+        if p.exists():
+            shutil.copy2(fp, pack_dir / p.name)
 
     _packs[pack_id] = pack
     _save_pack_meta(pack)
@@ -66,7 +71,7 @@ def get_pack(pack_id: str) -> Optional[AssetPack]:
 
 
 def parse_pack(pack_id: str) -> AssetPack:
-    """Parse a PDF pack into individual asset items."""
+    """Parse a pack into individual asset items (PDF or images)."""
     pack = get_pack(pack_id)
     if not pack:
         raise ValueError(f"Pack {pack_id} not found")
@@ -76,7 +81,10 @@ def parse_pack(pack_id: str) -> AssetPack:
     _save_pack_meta(pack)
 
     try:
-        items = _extract_items_from_pdf(pack)
+        if pack.file_type == "image":
+            items = _extract_items_from_images(pack)
+        else:
+            items = _extract_items_from_pdf(pack)
         pack.item_count = len(items)
         pack.parse_status = "parsed"
         pack.updated_at = _now()
@@ -88,6 +96,73 @@ def parse_pack(pack_id: str) -> AssetPack:
 
     _save_pack_meta(pack)
     return pack
+
+
+def _extract_items_from_images(pack: AssetPack) -> list[AssetItem]:
+    """Handle image file uploads (PNG, JPG, etc.) — each file becomes one asset item."""
+    pack_dir = ASSET_DIR / "packs" / pack.asset_pack_id
+    items_dir = pack_dir / "items"
+    items_dir.mkdir(exist_ok=True)
+
+    from PIL import Image
+    extracted = []
+    img_exts = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".svg"}
+    img_index = 0
+
+    for f in sorted(pack_dir.iterdir()):
+        if f.suffix.lower() not in img_exts:
+            continue
+        try:
+            # Copy to items dir as PNG
+            item_id = f"item_{pack.asset_pack_id}_{img_index:03d}"
+            img_filename = f"{item_id}.png"
+            img_path = items_dir / img_filename
+
+            if f.suffix.lower() == ".svg":
+                # SVG: just copy as-is
+                shutil.copy2(f, items_dir / f"{item_id}{f.suffix}")
+                img_filename = f"{item_id}{f.suffix}"
+                w, h = 0, 0
+            else:
+                img = Image.open(f)
+                if img.mode not in ("RGB", "RGBA"):
+                    img = img.convert("RGBA")
+                img.save(str(img_path), "PNG")
+                w, h = img.width, img.height
+
+            item = AssetItem(
+                asset_item_id=item_id,
+                asset_pack_id=pack.asset_pack_id,
+                name=f.stem,
+                type=_guess_type_by_size(w, h) if w > 0 else "graphic",
+                tags=[],
+                bbox=[0, 0, w, h],
+                page=0,
+                preview_url=f"/assets/packs/{pack.asset_pack_id}/items/{img_filename}",
+                png_url=f"/assets/packs/{pack.asset_pack_id}/items/{img_filename}",
+                applicable_image_types=pack.usage,
+                status="available",
+                created_at=_now(),
+            )
+            _items[item_id] = item
+            extracted.append(item)
+            img_index += 1
+        except Exception as e:
+            print(f"  [AssetParse] 跳过文件 {f.name}: {e}")
+            continue
+
+    pack.page_count = 0
+    print(f"  [AssetParse] 提取到 {len(extracted)} 个图片素材")
+
+    # VLM auto-label
+    _label_items_with_vlm(extracted, items_dir)
+
+    # Save items metadata
+    items_meta = [it.model_dump() for it in extracted]
+    (pack_dir / "items.json").write_text(
+        json.dumps(items_meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return extracted
 
 
 def _extract_items_from_pdf(pack: AssetPack) -> list[AssetItem]:
