@@ -1,1163 +1,432 @@
-/**
- * 电商批量生图平台 - 前端逻辑
- */
-
-// === State ===
-let currentPage = 'dashboard';
+/* ===== State ===== */
+let currentPage = 'workbench';
+let currentSku = null;
 let products = [];
 let tasksList = [];
-let assetsList = [];
-let workflowsList = [];
-let agentsList = [];
-let agentStandards = null;
-let reviewList = [];
-let agentBlueprint = null;
-let agentRuns = [];
-let selectedAgentRun = null;
-let creativeState = { tasks: [], versions: [], assets: [], reviews: [], experiments: [], metrics: [], rules: [], strategy: null };
+let kbTab = 'category';
 
-// === Init ===
-document.addEventListener('DOMContentLoaded', () => {
-    loadDashboard();
-    loadProducts();
-    loadTasks();
-    loadModels();
-    loadAssets();
-    loadWorkflows();
-    loadAgents();
-    loadAgentWorkbench();
-    loadCreativeOS();
-    loadReviews();
-    loadSettings();
-    setupDragDrop();
-});
-
-// === Navigation ===
+/* ===== Navigation ===== */
 function showPage(page) {
     currentPage = page;
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    document.getElementById(`page-${page}`).classList.add('active');
-    document.querySelectorAll('.header-nav button').forEach(b => b.classList.remove('active'));
-    const pageLabels = {
-        dashboard: '数据看板',
-        'agent-workbench': 'Agent工作台',
-        'creative-os': '创意闭环',
-        products: 'SKU',
-        assets: '图片资产',
-        workflows: '工作流',
-        agents: 'Agent配置',
-        tasks: '任务',
-        review: '审核',
-        settings: '模型',
-    };
-    document.querySelectorAll('.header-nav button').forEach(b => {
-        if (b.textContent.includes(pageLabels[page] || '')) b.classList.add('active');
-    });
-
-    if (page === 'products') loadProducts();
-    if (page === 'agent-workbench') loadAgentWorkbench();
-    if (page === 'creative-os') loadCreativeOS();
-    if (page === 'assets') loadAssets();
-    if (page === 'workflows') loadWorkflows();
-    if (page === 'agents') loadAgents();
+    const el = document.getElementById('page-' + page);
+    if (el) el.classList.add('active');
+    document.querySelectorAll('#topNav button').forEach(b => b.classList.remove('active'));
+    const btns = document.querySelectorAll('#topNav button');
+    const map = { workbench: 0, tasks: 1, assets: 2, knowledge: 3, settings: 4 };
+    if (map[page] !== undefined && btns[map[page]]) btns[map[page]].classList.add('active');
     if (page === 'tasks') loadTasks();
-    if (page === 'review') loadReviews();
-    if (page === 'dashboard') loadDashboard();
-    if (page === 'settings') loadSettings();
+    if (page === 'assets') renderAssets();
+    if (page === 'knowledge') renderKb();
+    if (page === 'settings') renderSettings();
 }
 
-// === Creative OS ===
-async function loadCreativeOS() {
-    try {
-        const [tasks, versions, assets, reviews, experiments, metrics, rules] = await Promise.all([
-            api('/api/creative/tasks'),
-            api('/api/creative/versions'),
-            api('/api/creative/assets'),
-            api('/api/creative/reviews'),
-            api('/api/creative/experiments'),
-            api('/api/creative/metrics'),
-            api('/api/creative/rules'),
-        ]);
-        creativeState.tasks = tasks.tasks || [];
-        creativeState.versions = versions.versions || [];
-        creativeState.assets = assets.assets || [];
-        creativeState.reviews = reviews.reviews || [];
-        creativeState.experiments = experiments.experiments || [];
-        creativeState.metrics = metrics.metrics || [];
-        creativeState.rules = rules.rules || [];
-        renderCreativeOS();
-    } catch (e) { /* handled */ }
+/* ===== Toast ===== */
+function toast(msg, type = 'info') {
+    const c = document.getElementById('toastContainer');
+    const t = document.createElement('div');
+    t.className = 'toast toast-' + type;
+    t.textContent = msg;
+    c.appendChild(t);
+    setTimeout(() => t.remove(), 3000);
 }
 
-async function createCreativeTaskFromFirstSku() {
-    if (!products.length) await loadProducts();
-    const sku = products[0]?.product_id;
-    if (!sku) return showToast('请先创建 SKU', 'error');
-    const data = await api('/api/creative/tasks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sku_id: sku, objective: '提升 Amazon Listing CTR/CVR 并降低退货', target_metrics: ['CTR', 'CVR', 'return_rate'] }),
-    });
-    creativeState.strategy = data.strategy_brief;
-    showToast('策略 Brief 已生成', 'success');
-    await loadCreativeOS();
-    renderCreativeOS();
+/* ===== Modal ===== */
+function openModal(id) { document.getElementById(id).classList.add('show'); }
+function closeModal(id) { document.getElementById(id).classList.remove('show'); }
+function openNewProductModal() { openModal('productModal'); }
+function openNewTaskModal() {
+    const sel = document.getElementById('taskProductSelect');
+    sel.innerHTML = '<option value="">-- 选择 --</option>' + products.map(p =>
+        `<option value="${p.product_id}">${p.product_id} - ${p.name || ''}</option>`).join('');
+    openModal('taskModal');
 }
 
-async function createTemplateVersionFromFirstSku() {
-    if (!products.length) await loadProducts();
-    const sku = products[0]?.product_id;
-    if (!sku) return showToast('请先创建 SKU', 'error');
-    await api('/api/creative/template-version', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            sku_id: sku,
-            asset_type: 'dimension_infographic',
-            title: '205cm XXL Cat Tree Tower',
-            subtitle: 'Editable dimensions, text and product layers',
-        }),
-    });
-    showToast('分层模板资产已生成', 'success');
-    await loadCreativeOS();
-}
-
-function renderCreativeOS() {
-    const strategyEl = document.getElementById('creativeStrategyPanel');
-    const versionEl = document.getElementById('creativeVersionPanel');
-    const reviewEl = document.getElementById('creativeReviewPanel');
-    const learningEl = document.getElementById('creativeLearningPanel');
-    if (strategyEl) {
-        const task = creativeState.tasks[0];
-        const brief = creativeState.strategy || task?.strategy_brief;
-        strategyEl.innerHTML = brief ? `
-            <div class="creative-summary">
-                <strong>${brief.sku_id || task?.sku_id || '-'}</strong>
-                <span>${brief.objective || task?.objective || '-'}</span>
-                <em>Primary: ${brief.primary_goal || '-'}</em>
-            </div>
-            <div class="factor-list">${(brief.creative_factors || []).map(f => `
-                <div class="factor-item">
-                    <b>${f.factor_id}</b>
-                    <span>${f.hypothesis}</span>
-                    <em>${f.target_metric}</em>
-                </div>
-            `).join('')}</div>
-            <pre class="compact-json">${escapeHtml(JSON.stringify(brief.prompt_brief || {}, null, 2))}</pre>
-        ` : '<div class="empty-state compact-empty"><h3>暂无策略</h3><p>点击生成策略 Brief。</p></div>';
-    }
-    if (versionEl) {
-        versionEl.innerHTML = creativeState.versions.length ? creativeState.versions.slice(0, 6).map(v => `
-            <div class="version-item">
-                <div>
-                    <strong>${v.version_name}</strong>
-                    <span>${v.version_id} · ${v.sku_id}</span>
-                </div>
-                <em>${(v.asset_ids || []).length} assets</em>
-            </div>
-        `).join('') : '<div class="empty-state compact-empty"><h3>暂无版本</h3><p>生成模板资产或运行生图任务后会出现。</p></div>';
-    }
-    if (reviewEl) {
-        reviewEl.innerHTML = creativeState.reviews.length ? creativeState.reviews.slice(0, 8).map(r => `
-            <div class="review-mini">
-                <strong>${r.decision}</strong>
-                <span>${(r.tags || []).join(' / ') || '无标签'}</span>
-                <em>${r.comment || ''}</em>
-            </div>
-        `).join('') : '<div class="empty-state compact-empty"><h3>暂无审核反馈</h3><p>后续人工审核标签会回流到这里。</p></div>';
-    }
-    if (learningEl) {
-        learningEl.innerHTML = `
-            <div class="learning-stats">
-                <div><strong>${creativeState.experiments.length}</strong><span>实验</span></div>
-                <div><strong>${creativeState.metrics.length}</strong><span>指标</span></div>
-                <div><strong>${creativeState.rules.length}</strong><span>规则</span></div>
-            </div>
-            <div class="factor-list">${creativeState.rules.slice(0, 5).map(rule => `
-                <div class="factor-item">
-                    <b>${rule.rule_type}</b>
-                    <span>${rule.statement}</span>
-                    <em>${Math.round((rule.confidence || 0) * 100)}%</em>
-                </div>
-            `).join('') || '<p class="muted-copy">ABTest 和审核复盘后会沉淀知识规则。</p>'}</div>
-        `;
-    }
-}
-
-// === Agent Workbench ===
-async function loadAgentWorkbench() {
-    try {
-        await Promise.all([loadProducts(), loadAgentBlueprint(), loadAgentRuns()]);
-        populateAgentSkuSelect();
-    } catch (e) { /* handled */ }
-}
-
-async function loadAgentBlueprint() {
-    const data = await api('/api/agent-blueprint');
-    agentBlueprint = data;
-    renderAgentBlueprint();
-}
-
-function renderAgentBlueprint() {
-    const desc = document.getElementById('agentBlueprintDesc');
-    const list = document.getElementById('agentPatternList');
-    if (!desc || !list || !agentBlueprint) return;
-    desc.textContent = agentBlueprint.description || '';
-    list.innerHTML = (agentBlueprint.patterns || []).map(pattern => `
-        <div class="pattern-item">
-            <strong>${pattern.name}</strong>
-            <span>${pattern.purpose}</span>
-        </div>
-    `).join('');
-}
-
-function populateAgentSkuSelect() {
-    const select = document.getElementById('agentSkuSelect');
-    if (!select) return;
-    const current = select.value;
-    select.innerHTML = products.map(p => `
-        <option value="${p.product_id}" ${p.product_id === current ? 'selected' : ''}>${p.product_id} - ${p.name}</option>
-    `).join('');
-}
-
-async function loadAgentRuns() {
-    const data = await api('/api/agent-runs');
-    agentRuns = data.runs || [];
-    renderAgentRuns();
-}
-
-function runStatusText(status) {
-    return {
-        running: '运行中',
-        needs_input: '等待澄清',
-        ready_for_generation: '可发起生图',
-        generation_launched: '已发起生图',
-        error: '失败',
-    }[status] || status || '-';
-}
-
-function renderAgentRuns() {
-    const list = document.getElementById('agentRunList');
-    if (!list) return;
-    if (agentRuns.length === 0) {
-        list.innerHTML = '<div class="empty-state compact-empty"><h3>暂无 Agent Run</h3><p>从左侧选择 SKU 后启动。</p></div>';
-        return;
-    }
-    list.innerHTML = agentRuns.map(run => `
-        <button class="agent-run-item" type="button" onclick="selectAgentRun('${run.run_id}')">
-            <span class="task-id">${run.run_id}</span>
-            <strong>${run.sku_id}</strong>
-            <em>${runStatusText(run.status)}</em>
-            <small>${run.updated_at || run.created_at}</small>
-        </button>
-    `).join('');
-}
-
-async function selectAgentRun(runId) {
-    selectedAgentRun = await api(`/api/agent-runs/${runId}`);
-    renderAgentRunDetail(selectedAgentRun);
-}
-
-async function handleAgentRunSubmit(e) {
-    e.preventDefault();
-    const form = e.target;
-    const imageTypes = Array.from(form.querySelectorAll('input[name="image_types"]:checked')).map(input => input.value);
-    const body = {
-        sku_id: form.sku_id.value,
-        objective: form.objective.value.trim(),
-        image_types: imageTypes,
-        languages: ['zh-CN'],
-    };
-    const run = await api('/api/agent-runs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-    });
-    selectedAgentRun = run;
-    showToast(`Agent Run ${run.run_id} 已启动`, 'success');
-    await loadAgentRuns();
-    renderAgentRunDetail(run);
-}
-
-function statusClass(status) {
-    if (status === 'completed' || status === 'ready_for_generation' || status === 'generation_launched') return 'done';
-    if (status === 'waiting' || status === 'needs_input') return 'pending';
-    if (status === 'error') return 'error';
-    return 'running';
-}
-
-function renderAgentRunDetail(run) {
-    if (!run) return;
-    selectedAgentRun = run;
-    const card = document.getElementById('agentRunDetailCard');
-    const title = document.getElementById('agentRunDetailTitle');
-    const summary = document.getElementById('agentRunSummary');
-    if (card) card.style.display = 'block';
-    if (title) title.textContent = `${run.run_id} · ${run.sku_id} · ${runStatusText(run.status)}`;
-    if (summary) summary.textContent = run.objective || '';
-    renderAgentQuestions(run);
-    renderAgentSteps(run);
-    renderAgentMemory(run);
-}
-
-function renderAgentQuestions(run) {
-    const el = document.getElementById('agentQuestions');
-    if (!el) return;
-    if (run.status !== 'needs_input' || !(run.questions || []).length) {
-        el.innerHTML = '';
-        return;
-    }
-    el.innerHTML = `
-        <div class="question-box">
-            <strong>Inversion 检查点：需要补充信息</strong>
-            <form onsubmit="submitAgentAnswers(event)">
-                ${(run.questions || []).map(q => `
-                    <label>${q.question}
-                        <textarea class="form-textarea" name="${q.field}" rows="2"></textarea>
-                    </label>
-                `).join('')}
-                <button class="btn btn-primary" type="submit">提交并继续</button>
-            </form>
-        </div>
-    `;
-}
-
-async function submitAgentAnswers(e) {
-    e.preventDefault();
-    if (!selectedAgentRun) return;
-    const data = new FormData(e.target);
-    const answers = {};
-    for (const [key, value] of data.entries()) answers[key] = value;
-    const run = await api(`/api/agent-runs/${selectedAgentRun.run_id}/answers`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answers }),
-    });
-    selectedAgentRun = run;
-    showToast('Agent 已继续执行', 'success');
-    await loadAgentRuns();
-    renderAgentRunDetail(run);
-}
-
-function renderAgentSteps(run) {
-    const el = document.getElementById('agentStepList');
-    if (!el) return;
-    el.innerHTML = (run.steps || []).map(step => `
-        <div class="agent-step ${statusClass(step.status)}">
-            <div>
-                <span class="pattern-badge">${step.pattern}</span>
-                <strong>${step.name}</strong>
-                <p>${step.objective}</p>
-                ${(step.issues || []).map(issue => `<em>${issue}</em>`).join('')}
-            </div>
-            <small>${step.status}</small>
-        </div>
-    `).join('');
-}
-
-function renderKeyValuePanel(title, data) {
-    return `
-        <div class="kv-panel">
-            <strong>${title}</strong>
-            <pre>${escapeHtml(JSON.stringify(data || {}, null, 2))}</pre>
-        </div>
-    `;
-}
-
-function renderArtifactCard(title, artifact, accent = '') {
-    if (!artifact) return '';
-    return `
-        <div class="artifact-card ${accent}">
-            <strong>${title}</strong>
-            <pre>${escapeHtml(JSON.stringify(artifact, null, 2))}</pre>
-        </div>
-    `;
-}
-
-function renderAgentArtifactCards(artifacts = {}) {
-    const cards = [
-        ['SKU 理解 Agent', artifacts.sku_understanding, 'blue'],
-        ['商品资产处理 Agent', artifacts.asset_processing, 'amber'],
-        ['视觉策略 Agent', artifacts.visual_strategy, 'green'],
-        ['Prompt 生成 Agent', artifacts.prompt_pack, 'blue'],
-        ['工作流编排 Agent', artifacts.workflow_orchestration, 'green'],
-        ['多模型调度 Agent', artifacts.model_routing, 'blue'],
-        ['质量评估 Agent', artifacts.quality_assessment, 'red'],
-    ];
-    return `<div class="artifact-grid">${cards.map(([title, data, accent]) => renderArtifactCard(title, data, accent)).join('')}</div>`;
-}
-
-function escapeHtml(str) {
-    return String(str)
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#039;');
-}
-
-function renderAgentMemory(run) {
-    const memoryEl = document.getElementById('agentMemoryPanel');
-    const artifactEl = document.getElementById('agentArtifactPanel');
-    if (memoryEl) memoryEl.innerHTML = renderKeyValuePanel('Memory', run.memory);
-    if (artifactEl) artifactEl.innerHTML = renderAgentArtifactCards(run.artifacts);
-}
-
-async function launchGenerationFromRun() {
-    if (!selectedAgentRun) {
-        showToast('请先选择一个 Agent Run', 'error');
-        return;
-    }
-    if (selectedAgentRun.status !== 'ready_for_generation') {
-        showToast('当前 Agent Run 尚未通过计划预审', 'error');
-        return;
-    }
-    const data = await api(`/api/agent-runs/${selectedAgentRun.run_id}/launch-generation`, { method: 'POST' });
-    selectedAgentRun = data.run;
-    showToast(`生图任务 #${data.task.task_id} 已创建`, 'success');
-    await loadAgentRuns();
-    renderAgentRunDetail(data.run);
-    pollTaskProgress(data.task.task_id);
-}
-
-// === API Helpers ===
-async function api(url, options = {}) {
-    try {
-        const res = await fetch(url, options);
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({ detail: res.statusText }));
-            throw new Error(err.detail || '请求失败');
-        }
-        return await res.json();
-    } catch (e) {
-        showToast(e.message, 'error');
-        throw e;
-    }
-}
-
-// === Dashboard ===
-async function loadDashboard() {
-    try {
-        const [prodData, taskData, dashData] = await Promise.all([
-            api('/api/products'),
-            api('/api/tasks'),
-            api('/api/dashboard'),
-        ]);
-        products = prodData.products || [];
-        tasksList = taskData.tasks || [];
-        const stats = dashData.stats || {};
-
-        document.getElementById('statProducts').textContent = stats.sku_count ?? products.length;
-        document.getElementById('statTasks').textContent = stats.task_count ?? tasksList.length;
-        document.getElementById('statDone').textContent = stats.done_count ?? tasksList.filter(t => t.status === 'done').length;
-        document.getElementById('statImages').textContent = stats.asset_count ?? tasksList.reduce((s, t) => s + (t.images?.length || 0), 0);
-        renderPipeline(dashData.pipeline || []);
-    } catch (e) { /* handled by api() */ }
-}
-
-function renderPipeline(pipeline) {
-    const el = document.getElementById('pipelineStrip');
-    if (!el) return;
-    el.innerHTML = pipeline.map((step, index) => `
-        <div class="pipeline-step">
-            <div class="pipeline-index">${String(index + 1).padStart(2, '0')}</div>
-            <div>
-                <strong>${step.name}</strong>
-                <span>${step.status}</span>
-            </div>
-        </div>
-    `).join('');
-}
-
-async function loadModels() {
-    try {
-        const data = await api('/api/models');
-        const el = document.getElementById('modelConfig');
-        if (!el) return;
-        const labels = {
-            image_primary: '图像生成(主)', image_secondary: '图像生成(备)',
-            llm_primary: 'LLM(主)', llm_secondary: 'LLM(备)',
-            translation: '翻译', quality: '质量评估',
-        };
-        el.innerHTML = Object.entries(data.models).map(([k, v]) => `
-            <div style="display:flex; justify-content:space-between; padding:10px 14px; background:var(--bg-input); border-radius:8px;">
-                <span style="color:var(--text-muted); font-size:13px;">${labels[k] || k}</span>
-                <span style="color:var(--accent); font-size:13px; font-weight:600;">${v}</span>
-            </div>
-        `).join('');
-    } catch (e) { /* ignore */ }
-}
-
-// === Products ===
+/* ===== Products ===== */
 async function loadProducts() {
     try {
-        const data = await api('/api/products');
-        products = data.products || [];
-        renderProducts();
-    } catch (e) { /* handled */ }
+        const r = await fetch('/api/products');
+        const d = await r.json();
+        products = d.products || [];
+    } catch { products = []; }
+    renderSkuList();
+    if (products.length && !currentSku) selectSku(products[0]);
 }
 
-function renderProducts() {
-    const grid = document.getElementById('productGrid');
-    const empty = document.getElementById('productEmpty');
-
-    if (products.length === 0) {
-        grid.innerHTML = '';
-        empty.style.display = 'block';
-        return;
-    }
-
-    empty.style.display = 'none';
-    grid.innerHTML = products.map(p => `
-        <div class="product-card" onclick="viewProduct('${p.product_id}')">
-            <div class="product-card-img">
-                ${p.image_url ? `<img src="${p.image_url}" alt="${p.product_id}">` : `<div class="placeholder">SKU</div>`}
-            </div>
-            <div class="product-card-body">
-                <div class="id">${p.product_id}</div>
-                <h3>${p.name || '未命名产品'}</h3>
-                <p>${p.description || '暂无描述'}</p>
-            </div>
-            <div class="product-card-footer">
-                <span class="sp-count">${(p.selling_points || []).length} 个卖点 / ${(p.image_plan || []).length} 张计划图</span>
-                <button class="btn btn-sm btn-secondary" onclick="event.stopPropagation(); startTask('${p.product_id}')">生图</button>
-            </div>
-        </div>
-    `).join('');
-}
-
-function viewProduct(productId) {
-    const p = products.find(x => x.product_id === productId);
-    if (!p) return;
-
-    const modal = document.getElementById('taskDetailModal');
-    document.getElementById('taskDetailTitle').textContent = `SKU ${p.product_id} · ${p.name}`;
-    document.getElementById('taskDetailContent').innerHTML = `
-        <div class="form-grid">
-            <div class="form-group">
-                <div class="form-label">产品编号</div>
-                <div style="color:var(--accent); font-weight:700; font-size:16px;">${p.product_id}</div>
-            </div>
-            <div class="form-group">
-                <div class="form-label">定位</div>
-                <div>${p.positioning || '-'}</div>
-            </div>
-            <div class="form-group full">
-                <div class="form-label">描述</div>
-                <div style="color:var(--text-secondary);">${p.description || '-'}</div>
-            </div>
-            <div class="form-group full">
-                <div class="form-label">目标人群</div>
-                <div style="color:var(--text-secondary);">${p.target_audience || '-'}</div>
-            </div>
-            <div class="form-group full">
-                <div class="form-label">卖点</div>
-                <div>${(p.selling_points || []).map(sp => `<div style="padding:6px 0; border-bottom:1px solid var(--border);">• ${sp}</div>`).join('')}</div>
-            </div>
-            <div class="form-group full">
-                <div class="form-label">生成计划</div>
-                <div class="mini-table">
-                    ${(p.image_plan || []).map(plan => `
-                        <div class="mini-row">
-                            <span>${plan.index || '-'}</span>
-                            <strong>${plan.type || 'image'}</strong>
-                            <em>${plan.description || ''}</em>
-                        </div>
-                    `).join('') || '<span style="color:var(--text-muted);">暂无生成计划</span>'}
+function renderSkuList() {
+    const el = document.getElementById('skuList');
+    if (!products.length) { el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px;">暂无 SKU<br><button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="openNewProductModal()">新建</button></div>'; return; }
+    el.innerHTML = products.map(p => {
+        const active = currentSku && currentSku.product_id === p.product_id ? ' active' : '';
+        const img = p.image_url ? `<img src="${p.image_url}" alt="">` : '<div style="display:flex;align-items:center;justify-content:center;height:100%;font-size:16px">📦</div>';
+        const cat = p.category || 'Cat Tree';
+        return `<div class="sku-card${active}" onclick="selectSku(products.find(x=>x.product_id==='${p.product_id}'))">
+            <div class="sku-card-top">
+                <div class="sku-card-thumb">${img}</div>
+                <div class="sku-card-info">
+                    <div class="sku-card-id">${p.product_id}</div>
+                    <div class="sku-card-name">${p.name || p.product_id}</div>
                 </div>
             </div>
-            <div class="form-group full">
-                <div class="form-label">关键词</div>
-                <div style="display:flex; flex-wrap:wrap; gap:6px;">
-                    ${(p.keywords || []).map(k => `<span class="tag">${k}</span>`).join('')}
-                </div>
-            </div>
-            <div class="form-group full">
-                <div class="form-label">竞品参考</div>
-                <div>${(p.competitors || []).map(link => `<a class="text-link" href="${link}" target="_blank" rel="noreferrer">${link}</a>`).join('') || '-'}</div>
-            </div>
-        </div>
-        <div class="btn-group">
-            <button class="btn btn-primary" onclick="closeModal('taskDetailModal'); startTask('${p.product_id}')">创建生图任务</button>
-        </div>
-    `;
-    modal.classList.add('active');
-}
-
-// === Asset Library ===
-async function loadAssets() {
-    try {
-        const data = await api('/api/assets');
-        assetsList = data.assets || [];
-        renderAssets();
-    } catch (e) { /* handled */ }
-}
-
-function renderAssets() {
-    const el = document.getElementById('assetLibrary');
-    if (!el) return;
-    if (assetsList.length === 0) {
-        el.innerHTML = '<div class="empty-state"><h3>暂无图片资产</h3><p>上传 SKU 图片或执行生图任务后会自动归档</p></div>';
-        return;
-    }
-    el.innerHTML = assetsList.map(group => `
-        <div class="card">
-            <div class="card-header">
-                <div class="card-title">${group.sku_id} · ${group.name}</div>
-                <span class="tag">${group.asset_count} 个资产</span>
-            </div>
-            <div class="asset-grid">
-                ${(group.assets || []).map(asset => `
-                    <div class="asset-item">
-                        ${asset.url ? `<img src="${asset.url}" alt="${asset.name}" loading="lazy">` : '<div class="asset-placeholder">No Image</div>'}
-                        <div>
-                            <strong>${asset.type}</strong>
-                            <span>${asset.name}</span>
-                        </div>
-                    </div>
-                `).join('') || '<p style="color:var(--text-muted);">暂无资产</p>'}
-            </div>
-        </div>
-    `).join('');
-}
-
-// === Workflows ===
-async function loadWorkflows() {
-    try {
-        const data = await api('/api/workflows');
-        workflowsList = data.workflows || [];
-        renderWorkflows();
-    } catch (e) { /* handled */ }
-}
-
-function renderWorkflows() {
-    const el = document.getElementById('workflowGrid');
-    if (!el) return;
-    el.innerHTML = workflowsList.map(w => `
-        <div class="workflow-card">
-            <div class="workflow-head">
-                <span class="tag">${w.priority}</span>
-                <strong>${w.name}</strong>
-                <small>${w.category}</small>
-            </div>
-            <p>${w.usage}</p>
-            <div class="node-list">${(w.nodes || []).map(n => `<span>${n}</span>`).join('')}</div>
-        </div>
-    `).join('');
-}
-
-// === Agents ===
-async function loadAgents() {
-    try {
-        const [data, standards] = await Promise.all([
-            api('/api/agents'),
-            api('/api/agent-standards'),
-        ]);
-        agentsList = data.agents || [];
-        agentStandards = standards;
-        renderAgentStandards();
-        renderAgents();
-    } catch (e) { /* handled */ }
-}
-
-function standardStatusLabel(status) {
-    return { pass: '已满足', partial: '部分满足', todo: '待补齐' }[status] || status;
-}
-
-function renderAgentStandards() {
-    if (!agentStandards) return;
-    const scoreEl = document.getElementById('agentComplianceScore');
-    const verdictEl = document.getElementById('agentVerdict');
-    const gridEl = document.getElementById('agentStandardGrid');
-    const runtimeEl = document.getElementById('runtimeGrid');
-    const handoffEl = document.getElementById('handoffList');
-    if (scoreEl) scoreEl.textContent = `${agentStandards.compliance_score} / 100`;
-    if (verdictEl) verdictEl.textContent = agentStandards.verdict;
-    if (gridEl) {
-        gridEl.innerHTML = (agentStandards.required_contract || []).map(item => `
-            <div class="standard-item ${item.status}">
-                <div>
-                    <strong>${item.name}</strong>
-                    <span>${item.description}</span>
-                </div>
-                <em>${standardStatusLabel(item.status)}</em>
-            </div>
-        `).join('');
-    }
-    if (runtimeEl) {
-        runtimeEl.innerHTML = Object.entries(agentStandards.runtime_state || {}).map(([key, values]) => `
-            <div class="runtime-card">
-                <strong>${key}</strong>
-                <div class="chip-list">${values.map(v => `<span>${v}</span>`).join('')}</div>
-            </div>
-        `).join('');
-    }
-    if (handoffEl) {
-        handoffEl.innerHTML = (agentStandards.handoff_policy || []).map(rule => `<div>${rule}</div>`).join('');
-    }
-}
-
-function renderAgents() {
-    const el = document.getElementById('agentGrid');
-    if (!el) return;
-    el.innerHTML = agentsList.map(agent => `
-        <div class="agent-card">
-            <div class="agent-card-top">
-                <strong>${agent.name}</strong>
-                <span class="task-status ${agent.status === 'active' ? 'running' : agent.status === 'partial' ? 'pending' : 'done'}">● ${agent.status}</span>
-            </div>
-            <p>${agent.goal || ''}</p>
-            <div class="agent-output">${agent.output}</div>
-            <div class="agent-section"><b>输入</b><div class="chip-list">${(agent.inputs || []).map(c => `<span>${c}</span>`).join('')}</div></div>
-            <div class="agent-section"><b>工具</b><div class="chip-list">${(agent.tools || []).map(c => `<span>${c}</span>`).join('')}</div></div>
-            <div class="agent-section"><b>记忆</b><div class="chip-list">${(agent.memory || []).map(c => `<span>${c}</span>`).join('')}</div></div>
-            <div class="agent-section"><b>护栏</b><div class="chip-list">${(agent.guardrails || []).map(c => `<span>${c}</span>`).join('')}</div></div>
-            <div class="agent-section"><b>评估</b><div class="chip-list">${(agent.evals || []).map(c => `<span>${c}</span>`).join('')}</div></div>
-        </div>
-    `).join('');
-}
-
-function openNewProductModal() {
-    document.getElementById('productForm').reset();
-    const zone = document.getElementById('productUploadZone');
-    zone.classList.remove('has-image');
-    zone.querySelector('.icon').style.display = '';
-    zone.querySelector('.text').style.display = '';
-    const oldPreview = zone.querySelector('.upload-preview');
-    if (oldPreview) oldPreview.remove();
-
-    document.getElementById('productModal').classList.add('active');
-}
-
-async function handleProductSubmit(e) {
-    e.preventDefault();
-    const form = e.target;
-    const data = {
-        product_id: form.product_id.value.trim(),
-        name: form.name.value.trim(),
-        description: form.description.value.trim(),
-        target_audience: form.target_audience.value.trim(),
-        positioning: form.positioning.value.trim(),
-        selling_points: form.selling_points.value.split('\n').map(s => s.trim()).filter(Boolean),
-        keywords: form.keywords.value.split(',').map(s => s.trim()).filter(Boolean),
-        scene_requirements: form.scene_requirements.value.trim(),
-    };
-
-    try {
-        await api('/api/products', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(data),
-        });
-
-        // Upload image if selected
-        const fileInput = form.querySelector('input[type="file"]');
-        if (fileInput.files.length > 0) {
-            const fd = new FormData();
-            fd.append('file', fileInput.files[0]);
-            await api(`/api/products/${data.product_id}/image`, { method: 'POST', body: fd });
-        }
-
-        showToast('产品保存成功！', 'success');
-        closeModal('productModal');
-        loadProducts();
-        loadDashboard();
-    } catch (e) { /* handled */ }
-}
-
-// === Tasks ===
-async function loadTasks() {
-    try {
-        const data = await api('/api/tasks');
-        tasksList = data.tasks || [];
-        renderTasks();
-    } catch (e) { /* handled */ }
-}
-
-function renderTasks() {
-    const list = document.getElementById('taskList');
-    const empty = document.getElementById('taskEmpty');
-
-    if (tasksList.length === 0) {
-        list.innerHTML = '';
-        empty.style.display = 'block';
-        return;
-    }
-
-    empty.style.display = 'none';
-    list.innerHTML = tasksList.map(t => {
-        const statusClass = t.status || 'pending';
-        const statusText = { done: '已完成', running: '运行中', pending: '等待中', error: '失败' }[statusClass] || t.status;
-        const time = t.created_at ? new Date(t.created_at).toLocaleString('zh-CN') : '-';
-        return `
-        <div class="task-item" onclick="viewTask('${t.task_id}')">
-            <div class="task-id">#${t.task_id}</div>
-            <div class="task-product">${t.product_id}</div>
-            <div class="task-status ${statusClass}">● ${statusText}</div>
-            <div class="task-time">${time}</div>
-            <div>
-                <div class="progress-bar"><div class="progress-fill" style="width:${t.progress || 0}%"></div></div>
+            <div class="sku-card-meta">
+                <span class="sku-tag explore">Explore</span>
+                <span class="sku-tag pending">待选图</span>
             </div>
         </div>`;
     }).join('');
 }
 
-function startTask(productId) {
-    document.getElementById('taskProductSelect').value = productId;
-    openNewTaskModal();
-}
-
-function openNewTaskModal() {
-    // Populate product select
-    const select = document.getElementById('taskProductSelect');
-    const currentVal = select.value;
-    select.innerHTML = '<option value="">-- 选择产品 --</option>' +
-        products.map(p => `<option value="${p.product_id}" ${p.product_id === currentVal ? 'selected' : ''}>${p.product_id} - ${p.name}</option>`).join('');
-
-    // Reset upload zone
-    const zone = document.getElementById('taskUploadZone');
-    if (zone) {
-        zone.classList.remove('has-image');
-        const icon = zone.querySelector('.icon');
-        const text = zone.querySelector('.text');
-        if (icon) icon.style.display = '';
-        if (text) text.style.display = '';
-        const oldPreview = zone.querySelector('.upload-preview');
-        if (oldPreview) oldPreview.remove();
-        const fileInput = zone.querySelector('input[type="file"]');
-        if (fileInput) fileInput.value = '';
-    }
-    setupDragDrop();
-
-    document.getElementById('taskModal').classList.add('active');
-}
-
-async function handleTaskSubmit(e) {
-    e.preventDefault();
-    const form = e.target;
-    const productId = form.product_id.value;
-
-    // Upload image first
-    const fileInput = form.querySelector('input[name="product_image"]');
-    if (fileInput && fileInput.files.length > 0) {
-        const imgFd = new FormData();
-        imgFd.append('file', fileInput.files[0]);
-        try {
-            await api(`/api/products/${productId}/image`, { method: 'POST', body: imgFd });
-        } catch (err) {
-            showToast('\u56fe\u7247\u4e0a\u4f20\u5931\u8d25', 'error');
-            return;
-        }
-    }
-
-    // Create task
-    const fd = new FormData();
-    fd.append('product_id', productId);
-    fd.append('model', form.model.value);
-    fd.append('scene_count', form.scene_count.value);
-
-    try {
-        const data = await api('/api/tasks', { method: 'POST', body: fd });
-        showToast(`任务 #${data.task_id} 已创建，Pipeline 执行中...`, 'success');
-        closeModal('taskModal');
-        loadTasks();
-        // 自动打开任务详情并轮询进度
-        pollTaskProgress(data.task_id);
-    } catch (e) { /* handled */ }
-}
-
-function pollTaskProgress(taskId) {
-    viewTask(taskId);
-    const interval = setInterval(async () => {
-        const modal = document.getElementById('taskDetailModal');
-        const isOpen = modal.classList.contains('active');
-        try {
-            const t = await fetch(`/api/tasks/${taskId}`).then(r => r.json());
-            if (t.status === 'done' || t.status === 'error') {
-                clearInterval(interval);
-                loadTasks();
-                loadDashboard();
-                if (isOpen) updateTaskDetail(t);
-                if (t.status === 'done') showToast(`任务 #${taskId} 已完成！`, 'success');
-                if (t.status === 'error') showToast(`任务 #${taskId} 失败`, 'error');
-            } else if (isOpen) {
-                updateTaskDetail(t);
-            }
-        } catch (e) { clearInterval(interval); }
-    }, 5000);
-}
-
-async function viewTask(taskId) {
-    try {
-        const t = await api(`/api/tasks/${taskId}`);
-        updateTaskDetail(t);
-        document.getElementById('taskDetailModal').classList.add('active');
-    } catch (e) { /* handled */ }
-}
-
-function updateTaskDetail(t) {
-    const taskId = t.task_id;
-    document.getElementById('taskDetailTitle').textContent = `📋 任务 #${taskId}`;
-    const statusClass = t.status || 'pending';
-    const statusText = { done: '已完成', running: '运行中', pending: '等待中', error: '失败' }[statusClass] || t.status;
-
-    let imagesHtml = '';
-    if (t.images && t.images.length > 0) {
-        imagesHtml = `
-            <div class="form-label" style="margin:20px 0 12px;">生成图片</div>
-            <div class="gallery-grid">
-                ${t.images.map(img => `
-                    <div class="gallery-item">
-                        <img src="/api/tasks/${taskId}/images/${img.filename}" alt="${img.name}" loading="lazy">
-                        <div class="info">
-                            <h4>${img.name || img.filename}</h4>
-                            <p>${img.type || ''}</p>
-                        </div>
-                    </div>
-                `).join('')}
-            </div>`;
-    }
-
-    document.getElementById('taskDetailContent').innerHTML = `
-        <div class="form-grid">
-            <div class="form-group">
-                <div class="form-label">任务ID</div>
-                <div style="font-family:monospace; color:var(--accent);">${taskId}</div>
-            </div>
-            <div class="form-group">
-                <div class="form-label">状态</div>
-                <div class="task-status ${statusClass}">● ${statusText}</div>
-            </div>
-            <div class="form-group">
-                <div class="form-label">产品</div>
-                <div>${t.product_id}</div>
-            </div>
-            <div class="form-group">
-                <div class="form-label">当前步骤</div>
-                <div>${t.current_step || '-'}</div>
-            </div>
-            <div class="form-group full">
-                <div class="form-label">进度</div>
-                <div class="progress-bar" style="height:10px;"><div class="progress-fill" style="width:${t.progress || 0}%"></div></div>
-            </div>
-        </div>
-        ${imagesHtml}
-    `;
-}
-
-// === Review Center ===
-async function loadReviews() {
-    try {
-        const data = await api('/api/reviews');
-        reviewList = data.reviews || [];
-        renderReviews();
-    } catch (e) { /* handled */ }
-}
-
-function reviewImageUrl(item, img) {
-    if (item.output_dir) return `/output/${item.output_dir}/${img.filename}`;
-    return `/api/tasks/${item.task_id}/images/${img.filename}`;
-}
-
-function renderReviews() {
-    const el = document.getElementById('reviewList');
-    const empty = document.getElementById('reviewEmpty');
-    if (!el) return;
-    if (reviewList.length === 0) {
-        el.innerHTML = '';
-        if (empty) empty.style.display = 'block';
-        return;
-    }
-    if (empty) empty.style.display = 'none';
-    el.innerHTML = reviewList.map(item => `
-        <div class="review-card">
-            <div class="review-main">
-                <div>
-                    <div class="task-id">#${item.task_id}</div>
-                    <h3>${item.sku_id}</h3>
-                    <p>${item.issue || '等待人工审核确认商业可用性'}</p>
-                </div>
-                <div class="quality-score">
-                    <span>${item.score || '-'}</span>
-                    <small>质检分</small>
-                </div>
-                <span class="task-status pending">● ${item.status}</span>
-            </div>
-            <div class="review-images">
-                ${(item.images || []).map(img => `<img src="${reviewImageUrl(item, img)}" alt="${img.name}" loading="lazy">`).join('')}
-            </div>
-            <div class="btn-group">
-                <button class="btn btn-sm btn-primary" type="button">通过</button>
-                <button class="btn btn-sm btn-secondary" type="button">驳回</button>
-                <button class="btn btn-sm btn-secondary" type="button">一键重生成</button>
-            </div>
-        </div>
-    `).join('');
-}
-
-// === Modals ===
-function closeModal(id) {
-    document.getElementById(id).classList.remove('active');
-}
-
-// Close modal on overlay click
-document.querySelectorAll('.modal-overlay').forEach(overlay => {
-    overlay.addEventListener('click', (e) => {
-        if (e.target === overlay) overlay.classList.remove('active');
+function filterSkuList() {
+    const q = document.getElementById('skuSearchInput').value.toLowerCase();
+    document.querySelectorAll('.sku-card').forEach(c => {
+        c.style.display = c.textContent.toLowerCase().includes(q) ? '' : 'none';
     });
-});
+}
 
-// === Image Upload ===
+function selectSku(sku) {
+    if (!sku) return;
+    currentSku = sku;
+    renderSkuList();
+    renderWorkbench();
+}
+
+/* ===== Workbench Center ===== */
+function renderWorkbench() {
+    if (!currentSku) return;
+    const s = currentSku;
+    document.getElementById('wbSkuTitle').textContent = `${s.product_id}｜${s.name || ''}`;
+    document.getElementById('wbSkuMeta').innerHTML = `<span>品类：${s.category || 'Cat Tree / Cat Tower'}</span><span>定位：${(s.selling_points || []).slice(0, 3).join('、') || '高端大型猫爬架'}</span><span>关联知识库：猫爬架 Amazon 上货图通用提示词模板</span>`;
+    renderImagePlan();
+    renderRightPanel();
+}
+
+/* ===== Image Plan ===== */
+const IMAGE_PLAN = [
+    { key: 'hero_scene', label: '首图1', type: 'Hero Scene' },
+    { key: 'hero_scene_2', label: '首图2', type: 'Hero Scene' },
+    { key: 'lifestyle_scene', label: '场景图1', type: 'Lifestyle Scene' },
+    { key: 'lifestyle_scene_2', label: '场景图2', type: 'Lifestyle Scene' },
+    { key: 'material_plush', label: '材质图1', type: 'Material Detail' },
+    { key: 'material_sisal', label: '材质图2', type: 'Material Detail' },
+    { key: 'size_compare', label: '尺寸图', type: 'Size Compare' },
+    { key: 'selling_1', label: '卖点图1', type: 'Selling Point' },
+    { key: 'selling_2', label: '卖点图2', type: 'Selling Point' },
+];
+
+function renderImagePlan() {
+    const area = document.getElementById('imagePlanArea');
+    area.innerHTML = `<div class="plan-section-title">📋 图片计划 <span class="count">${IMAGE_PLAN.length} 张</span></div>
+    <div class="plan-grid">${IMAGE_PLAN.map(p => imgCard(p.label, p.type, '2000×2000')).join('')}</div>`;
+    renderExploreCandidates();
+}
+
+function imgCard(label, type, size, imgSrc, scores, badge) {
+    const badgeHtml = badge ? `<div class="img-card-badge ${badge}">${badge === 'recommended' ? '推荐' : badge === 'candidate' ? '候选' : badge === 'failed' ? '失败' : '未开始'}</div>` : '';
+    const bodyHtml = imgSrc ? `<img src="${imgSrc}" alt="${label}">${badgeHtml}` : `<div class="img-card-placeholder"><span class="icon">🖼</span>${size}</div>${badgeHtml}`;
+    const scoresHtml = scores ? `<div class="img-card-scores">
+        <div class="score"><span class="score-label">商业</span><span class="score-val ${scoreClass(scores.c)}">${scores.c}</span></div>
+        <div class="score"><span class="score-label">一致性</span><span class="score-val ${scoreClass(scores.k)}">${scores.k}</span></div>
+        <div class="score"><span class="score-label">缺陷</span><span class="score-val ${scoreClass(scores.d)}">${scores.d}</span></div>
+    </div>` : '';
+    return `<div class="img-card">
+        <div class="img-card-head"><span class="img-card-title">${label}｜${type}</span><span class="img-card-size">${size}</span></div>
+        <div class="img-card-body">${bodyHtml}</div>
+        <div class="img-card-foot">${scoresHtml}
+            <div class="img-card-actions">
+                <button class="btn btn-xs btn-secondary">查看候选</button>
+                <button class="btn btn-xs btn-secondary">重新生成</button>
+            </div>
+        </div>
+    </div>`;
+}
+
+function scoreClass(v) { return v >= 85 ? 'high' : v >= 65 ? 'mid' : 'low'; }
+
+/* ===== Explore Candidates ===== */
+const MOCK_EXPLORE = [
+    { group: '首图 Hero Scene', candidates: [
+        { id: '首图1 - 候选1', scores: { c: 92, k: 88, d: 78 }, badge: 'candidate' },
+        { id: '首图1 - 候选2', scores: { c: 92, k: 90, d: 86 }, badge: 'recommended' },
+        { id: '首图1 - 候选3', scores: { c: 92, k: 94, d: 78 }, badge: 'recommended' },
+        { id: '首图1 - 候选4', scores: { c: 92, k: 88, d: 78 }, badge: 'candidate' },
+    ]},
+    { group: '生活方式 Lifestyle Scene', candidates: [
+        { id: '场景图1 - 候选1', scores: { c: 88, k: 83, d: 62 }, badge: 'candidate' },
+        { id: '场景图1 - 候选2', scores: { c: 85, k: 82, d: 60 }, badge: 'candidate' },
+        { id: '场景图1 - 候选3', scores: { c: 88, k: 92, d: 62 }, badge: 'candidate' },
+        { id: '场景图1 - 候选4', scores: { c: 92, k: 90, d: 85 }, badge: 'recommended' },
+    ]},
+    { group: '材质细节 Material Detail', candidates: [
+        { id: '材质图1 - 候选1', scores: { c: 78, k: 34, d: 90 }, badge: 'candidate' },
+        { id: '材质图1 - 候选2', scores: { c: 78, k: 22, d: 92 }, badge: 'failed' },
+        { id: '材质图1 - 候选3', scores: { c: 90, k: 68, d: 92 }, badge: 'candidate' },
+        { id: '材质图1 - 候选4', scores: { c: 88, k: 62, d: 92 }, badge: 'candidate' },
+    ]},
+];
+
+function renderExploreCandidates() {
+    const area = document.getElementById('exploreCandidateArea');
+    area.innerHTML = `<div class="plan-section-title" style="margin-top:12px">🔍 Explore 候选图 <span class="count">3 组 × 4 候选</span></div>` +
+        MOCK_EXPLORE.map(g => `<div style="margin-bottom:8px;font-size:13px;font-weight:600;">${g.group}</div>
+        <div class="candidate-row">${g.candidates.map(c =>
+            imgCard(c.id, '', '2000×2000', null, c.scores, c.badge)
+        ).join('')}</div>`).join('');
+}
+
+/* ===== Right Panel ===== */
+function toggleRightPanel() {
+    const r = document.getElementById('wbRight');
+    r.classList.toggle('collapsed');
+}
+
+function renderRightPanel() {
+    const body = document.getElementById('wbRightBody');
+    body.innerHTML = `
+    <div class="ctx-section">
+        <div class="ctx-section-title">📂 当前品类知识</div>
+        <div class="ctx-item"><span class="label">品类路径</span>Pet Supplies &gt; Cat Supplies &gt; Cat Furniture &gt; Cat Tree / Cat Tower / Cat Condo</div>
+        <div class="ctx-item"><span class="label">文档名称</span>猫爬架 Amazon 上货图通用提示词模板</div>
+        <div class="ctx-item"><span class="label">全局规则</span>保持产品结构、比例、颜色、材质、功能部件一致；不要重设计产品</div>
+        <div class="ctx-item"><span class="label">场景规则</span>靠墙摆放；明显窗户光源；上午阳光；现代美国住宅风格</div>
+        <div class="ctx-item"><span class="label">图形规则</span>橙色辅助色；宠物图标；手绘元素轻量使用</div>
+        <div class="ctx-item"><span class="label">负面规则</span>
+            <div><span class="ctx-tag">不改变材质</span><span class="ctx-tag">不改变结构</span><span class="ctx-tag">不遮挡核心结构</span><span class="ctx-tag">不用深色光照</span><span class="ctx-tag">不加水印</span></div>
+        </div>
+        <div class="ctx-item"><span class="label">检查清单</span>
+            <ul class="ctx-checklist">
+                <li>产品主体结构完整可识别</li>
+                <li>颜色和材质与原图一致</li>
+                <li>底座稳固感明确</li>
+                <li>无多余文字/水印</li>
+                <li>光照自然、阴影合理</li>
+            </ul>
+        </div>
+    </div>
+    <div class="ctx-section">
+        <div class="ctx-section-title">🎨 素材选择</div>
+        <div class="ctx-item"><span class="label">素材灵感库</span><span class="ctx-tag">竞品参考 ×3</span></div>
+        <div class="ctx-item"><span class="label">标准素材库</span><span class="ctx-tag">图标包</span><span class="ctx-tag">品牌色</span></div>
+        <div class="ctx-item"><span class="label">手绘装饰</span><span class="ctx-tag">轻量爪印</span></div>
+    </div>
+    <div class="ctx-section">
+        <div class="ctx-section-title">⚙️ Agent 设置</div>
+        <div class="agent-mini-form">
+            <div class="row"><span class="label">SKU一致性等级</span><span class="value">medium_high</span></div>
+            <div class="row"><span class="label">生成模式</span><span class="value">Explore</span></div>
+            <div class="row"><span class="label">候选数量</span><span class="value">4</span></div>
+            <div class="row"><span class="label">尺寸</span><span class="value">2000×2000</span></div>
+            <div class="row"><span class="label">品类模板</span><span class="value">Cat Tree Amazon</span></div>
+        </div>
+    </div>`;
+}
+
+/* ===== Product Form ===== */
+async function handleProductSubmit(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+        await fetch('/api/products', { method: 'POST', body: fd });
+        closeModal('productModal');
+        toast('SKU 创建成功', 'success');
+        e.target.reset();
+        await loadProducts();
+    } catch (err) { toast('创建失败: ' + err.message, 'error'); }
+}
+
 function handleImagePreview(e, zoneId) {
     const file = e.target.files[0];
     if (!file) return;
-
     const zone = document.getElementById(zoneId);
     const reader = new FileReader();
     reader.onload = (ev) => {
-        zone.classList.add('has-image');
-        zone.querySelector('.icon').style.display = 'none';
-        zone.querySelector('.text').style.display = 'none';
-        const oldPreview = zone.querySelector('.upload-preview');
-        if (oldPreview) oldPreview.remove();
-        const img = document.createElement('img');
-        img.src = ev.target.result;
-        img.className = 'upload-preview';
-        zone.appendChild(img);
+        zone.innerHTML = `<img src="${ev.target.result}" style="max-height:120px;border-radius:8px;"><input type="file" name="product_image" accept="image/*" onchange="handleImagePreview(event,'${zoneId}')">`;
     };
     reader.readAsDataURL(file);
 }
 
-function setupDragDrop() {
-    document.querySelectorAll('.upload-zone').forEach(zone => {
-        zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('dragover'); });
-        zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
-        zone.addEventListener('drop', (e) => {
-            e.preventDefault();
-            zone.classList.remove('dragover');
-            const input = zone.querySelector('input[type="file"]');
-            if (e.dataTransfer.files.length > 0) {
-                input.files = e.dataTransfer.files;
-                input.dispatchEvent(new Event('change'));
-            }
-        });
-    });
+/* ===== Task Form ===== */
+async function handleTaskSubmit(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    try {
+        const r = await fetch('/api/tasks', { method: 'POST', body: fd });
+        const d = await r.json();
+        closeModal('taskModal');
+        toast(`任务 ${d.task_id} 已创建 (${d.mode})`, 'success');
+        showPage('tasks');
+    } catch (err) { toast('创建失败: ' + err.message, 'error'); }
 }
 
-// === Settings ===
-async function loadSettings() {
+/* ===== Explore Launch ===== */
+async function launchExplore() {
+    if (!currentSku) { toast('请先选择 SKU', 'error'); return; }
     try {
-        const data = await api('/api/settings');
+        const fd = new FormData();
+        fd.append('product_id', currentSku.product_id);
+        const r = await fetch('/api/explore-tasks', { method: 'POST', body: fd });
+        const d = await r.json();
+        toast(`Explore 任务 ${d.task_id} 已创建`, 'success');
+    } catch (err) { toast('创建失败: ' + err.message, 'error'); }
+}
 
-        // API Keys (show masked values)
-        document.getElementById('settingOpenaiKey').value = data.api_keys?.openai_api_key || '';
-        document.getElementById('settingOpenaiBaseUrl').value = data.api_keys?.openai_base_url || '';
-        document.getElementById('settingGoogleKey').value = data.api_keys?.google_api_key || '';
+/* ===== Tasks Page ===== */
+async function loadTasks() {
+    try {
+        const r = await fetch('/api/tasks');
+        const d = await r.json();
+        tasksList = d.tasks || [];
+    } catch { tasksList = []; }
+    renderTasks();
+}
 
-        // Status indicators
-        const rawSet = data._raw_keys_set || {};
-        document.getElementById('testResultOpenai').innerHTML = rawSet.openai_api_key
-            ? '<span style="color:var(--success)">● 已配置</span>'
-            : '<span style="color:var(--text-muted)">○ 未配置</span>';
-        document.getElementById('testResultGoogle').innerHTML = rawSet.google_api_key
-            ? '<span style="color:var(--success)">● 已配置</span>'
-            : '<span style="color:var(--text-muted)">○ 未配置</span>';
+function renderTasks() {
+    const area = document.getElementById('taskListArea');
+    if (!tasksList.length) { area.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">暂无任务</div>'; return; }
+    area.innerHTML = tasksList.map(t => {
+        const pct = t.progress || 0;
+        const statusTag = t.status === 'done' ? '<span class="tag tag-green">完成</span>'
+            : t.status === 'error' ? '<span class="tag tag-red">失败</span>'
+            : t.status === 'running' ? '<span class="tag tag-blue">运行中</span>'
+            : '<span class="tag tag-gray">等待</span>';
+        return `<div class="task-row">
+            <div class="task-id">${t.task_id}</div>
+            <div class="task-sku">${t.product_id}</div>
+            <div>${statusTag} <span class="tag tag-gray" style="margin-left:4px">${t.mode || 'batch'}</span></div>
+            <div class="task-step">${t.current_step || ''}</div>
+            <div class="task-progress"><div class="progress-bar"><div class="progress-bar-fill" style="width:${pct}%"></div></div></div>
+        </div>`;
+    }).join('');
+}
 
-        // Models
-        document.getElementById('modelImagePrimary').value = data.models?.image_primary || '';
-        document.getElementById('modelImageSecondary').value = data.models?.image_secondary || '';
-        document.getElementById('modelLlmPrimary').value = data.models?.llm_primary || '';
-        document.getElementById('modelLlmSecondary').value = data.models?.llm_secondary || '';
-        document.getElementById('modelTranslation').value = data.models?.translation || '';
-        document.getElementById('modelQuality').value = data.models?.quality || '';
+/* ===== Assets Page ===== */
+function renderAssets() {
+    const area = document.getElementById('assetLibraryArea');
+    const mockAssets = ['01_white_bg.png', '01_transparent.png', 'hero_scene_main_01.png', 'hero_scene_main_02.png', 'lifestyle_scene_main_01.png', 'material_detail_plush_01.png'];
+    area.innerHTML = `<div class="asset-grid">${mockAssets.map(a => `<div class="asset-thumb">
+        <div class="asset-thumb-img">🖼</div>
+        <div class="asset-thumb-label">${a}</div>
+    </div>`).join('')}</div>`;
+}
 
-        // Pipeline
-        document.getElementById('pipelineCandidates').value = data.pipeline?.candidates_per_step || 2;
-        document.getElementById('pipelineThreshold').value = data.pipeline?.quality_threshold || 0.85;
-        document.getElementById('pipelineRetries').value = data.pipeline?.max_retries || 3;
-    } catch (e) { /* handled */ }
+/* ===== Knowledge Base ===== */
+function showKbTab(tab) {
+    kbTab = tab;
+    document.querySelectorAll('#kbTabs button').forEach(b => b.classList.remove('active'));
+    const btns = document.querySelectorAll('#kbTabs button');
+    const map = { category: 0, inspiration: 1, standard: 2 };
+    if (btns[map[tab]]) btns[map[tab]].classList.add('active');
+    renderKb();
+}
+
+function renderKb() {
+    const body = document.getElementById('kbBody');
+    if (kbTab === 'category') renderKbCategory(body);
+    else if (kbTab === 'inspiration') renderKbInspiration(body);
+    else renderKbStandard(body);
+}
+
+function renderKbCategory(el) {
+    el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div style="font-size:15px;font-weight:600;">品类知识库</div>
+        <button class="btn btn-primary btn-sm" onclick="toast('上传文档功能即将上线','info')">📄 上传文档</button>
+    </div>
+    <table class="data-table"><thead><tr>
+        <th>文档名称</th><th>适用品类</th><th>上传时间</th><th>解析状态</th><th>规则数</th><th>检查清单</th><th>关联SKU</th>
+    </tr></thead><tbody>
+        <tr>
+            <td><strong>猫爬架 Amazon 上货图通用提示词模板</strong><br><span style="font-size:11px;color:var(--text-muted)">Cat Tree / Cat Tower Amazon Listing Image Prompt Template</span></td>
+            <td><span class="tag tag-blue">Cat Tree</span></td>
+            <td>2026-04-28</td>
+            <td><span class="tag tag-green">已解析</span></td>
+            <td>12</td><td>8</td><td>1</td>
+        </tr>
+        <tr>
+            <td><strong>宠物用品 Amazon 主图规范</strong></td>
+            <td><span class="tag tag-blue">Pet Supplies</span></td>
+            <td>2026-04-20</td>
+            <td><span class="tag tag-yellow">待解析</span></td>
+            <td>-</td><td>-</td><td>0</td>
+        </tr>
+    </tbody></table>`;
+}
+
+function renderKbInspiration(el) {
+    const items = [
+        { name: 'Amazon Top 1 Cat Tree Listing', type: '竞品图', cat: 'Cat Tree', tags: ['hero', 'lifestyle'] },
+        { name: '现代客厅猫爬架场景', type: '风格图', cat: 'Cat Tree', tags: ['scene', 'interior'] },
+        { name: '宠物摄影灯光参考', type: '场景图', cat: 'Pet', tags: ['lighting', 'studio'] },
+        { name: 'Infographic 排版参考', type: '排版参考', cat: 'General', tags: ['layout', 'info'] },
+    ];
+    el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div style="font-size:15px;font-weight:600;">素材灵感库</div>
+        <button class="btn btn-primary btn-sm" onclick="toast('上传素材功能即将上线','info')">📎 上传素材</button>
+    </div>
+    <div class="insp-grid">${items.map(i => `<div class="insp-card">
+        <div class="insp-card-img">🎨</div>
+        <div class="insp-card-body">
+            <h4>${i.name}</h4>
+            <div class="meta"><span class="tag tag-gray">${i.type}</span> <span class="tag tag-blue">${i.cat}</span></div>
+            <div style="margin-top:6px">${i.tags.map(t => `<span class="ctx-tag">${t}</span>`).join('')}</div>
+        </div>
+    </div>`).join('')}</div>`;
+}
+
+function renderKbStandard(el) {
+    const items = [
+        { name: '宠物图标包', type: '图标包', enabled: true },
+        { name: '手绘爪印装饰', type: '手绘元素', enabled: true },
+        { name: 'Brand Orange #FF6B35', type: '品牌色', enabled: true },
+        { name: 'Logo 透明底', type: 'Logo', enabled: false },
+        { name: '标准尺寸线样式', type: '尺寸标注', enabled: true },
+        { name: 'Amazon Infographic 组件', type: '版式组件', enabled: false },
+    ];
+    el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <div style="font-size:15px;font-weight:600;">标准素材库</div>
+        <button class="btn btn-primary btn-sm" onclick="toast('上传素材功能即将上线','info')">📎 上传素材</button>
+    </div>
+    <table class="data-table"><thead><tr><th>素材名称</th><th>类型</th><th>预览</th><th>默认启用</th></tr></thead><tbody>
+    ${items.map(i => `<tr><td><strong>${i.name}</strong></td><td><span class="tag tag-gray">${i.type}</span></td><td style="font-size:20px">🎨</td>
+        <td>${i.enabled ? '<span class="tag tag-green">启用</span>' : '<span class="tag tag-gray">未启用</span>'}</td></tr>`).join('')}
+    </tbody></table>`;
+}
+
+/* ===== Settings Page ===== */
+async function renderSettings() {
+    let settings = {};
+    try { const r = await fetch('/api/settings'); settings = await r.json(); } catch {}
+    const keys = settings.api_keys || {};
+    const models = settings.models || {};
+    const body = document.getElementById('settingsBody');
+    body.innerHTML = `
+    <div class="settings-card"><h3>🔑 API 密钥</h3>
+        <div class="form-grid">
+            <div class="form-group full"><label class="form-label">OpenAI API Key</label><input class="form-input" id="sKey" type="password" value="${keys.openai_api_key || ''}"></div>
+            <div class="form-group full"><label class="form-label">OpenAI Base URL</label><input class="form-input" id="sUrl" value="${keys.openai_base_url || ''}"></div>
+            <div class="form-group full"><label class="form-label">Google API Key</label><input class="form-input" id="sGoogle" type="password" value="${keys.google_api_key || ''}"></div>
+        </div>
+    </div>
+    <div class="settings-card"><h3>🤖 模型路由</h3>
+        <div class="form-grid">
+            <div class="form-group"><label class="form-label">图像生成(主)</label><input class="form-input" id="mImg" value="${models.image_primary || 'gpt-image-2'}"></div>
+            <div class="form-group"><label class="form-label">图像生成(备)</label><input class="form-input" id="mImg2" value="${models.image_secondary || ''}"></div>
+            <div class="form-group"><label class="form-label">LLM(主)</label><input class="form-input" id="mLlm" value="${models.llm_primary || ''}"></div>
+            <div class="form-group"><label class="form-label">LLM(备)</label><input class="form-input" id="mLlm2" value="${models.llm_secondary || ''}"></div>
+            <div class="form-group"><label class="form-label">质量评估</label><input class="form-input" id="mQa" value="${models.quality || ''}"></div>
+        </div>
+    </div>
+    <button class="btn btn-primary" onclick="saveSettings()">💾 保存设置</button>`;
 }
 
 async function saveSettings() {
-    const body = {
-        api_keys: {
-            openai_api_key: document.getElementById('settingOpenaiKey').value,
-            openai_base_url: document.getElementById('settingOpenaiBaseUrl').value,
-            google_api_key: document.getElementById('settingGoogleKey').value,
-        },
-        models: {
-            image_primary: document.getElementById('modelImagePrimary').value,
-            image_secondary: document.getElementById('modelImageSecondary').value,
-            llm_primary: document.getElementById('modelLlmPrimary').value,
-            llm_secondary: document.getElementById('modelLlmSecondary').value,
-            translation: document.getElementById('modelTranslation').value,
-            quality: document.getElementById('modelQuality').value,
-        },
-        pipeline: {
-            candidates_per_step: parseInt(document.getElementById('pipelineCandidates').value) || 2,
-            quality_threshold: parseFloat(document.getElementById('pipelineThreshold').value) || 0.85,
-            max_retries: parseInt(document.getElementById('pipelineRetries').value) || 3,
-        },
+    const data = {
+        api_keys: { openai_api_key: document.getElementById('sKey')?.value, openai_base_url: document.getElementById('sUrl')?.value, google_api_key: document.getElementById('sGoogle')?.value },
+        models: { image_primary: document.getElementById('mImg')?.value, image_secondary: document.getElementById('mImg2')?.value, llm_primary: document.getElementById('mLlm')?.value, llm_secondary: document.getElementById('mLlm2')?.value, quality: document.getElementById('mQa')?.value },
     };
-
     try {
-        await api('/api/settings', {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        });
-        showToast('设置已保存', 'success');
-        loadModels(); // refresh dashboard model display
-    } catch (e) { /* handled */ }
+        await fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+        toast('设置已保存', 'success');
+    } catch (err) { toast('保存失败', 'error'); }
 }
 
-function togglePassword(inputId) {
-    const input = document.getElementById(inputId);
-    input.type = input.type === 'password' ? 'text' : 'password';
-}
-
-async function testConnection(provider) {
-    const resultEl = document.getElementById(`testResult${provider === 'openai' ? 'Openai' : 'Google'}`);
-    resultEl.innerHTML = '<span style="color:var(--warning)">⏳ 测试中...</span>';
-
-    try {
-        const body = { provider };
-        if (provider === 'openai') {
-            const key = document.getElementById('settingOpenaiKey').value;
-            const baseUrl = document.getElementById('settingOpenaiBaseUrl').value;
-            if (key && !key.includes('***')) body.api_key = key;
-            if (baseUrl) body.base_url = baseUrl;
-        } else {
-            const key = document.getElementById('settingGoogleKey').value;
-            if (key && !key.includes('***')) body.api_key = key;
-        }
-
-        const data = await api('/api/settings/test', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        });
-
-        if (data.status === 'ok') {
-            resultEl.innerHTML = `<span style="color:var(--success)">✅ ${data.message}</span>`;
-        } else {
-            resultEl.innerHTML = `<span style="color:var(--error)">❌ ${data.message}</span>`;
-        }
-    } catch (e) {
-        resultEl.innerHTML = `<span style="color:var(--error)">❌ 连接失败</span>`;
-    }
-}
-
-// === Toast ===
-function showToast(msg, type = 'info') {
-    const container = document.getElementById('toastContainer');
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-    toast.textContent = msg;
-    container.appendChild(toast);
-    setTimeout(() => {
-        toast.style.opacity = '0';
-        toast.style.transform = 'translateX(100%)';
-        setTimeout(() => toast.remove(), 300);
-    }, 3000);
-}
+/* ===== Init ===== */
+document.addEventListener('DOMContentLoaded', () => { loadProducts(); });

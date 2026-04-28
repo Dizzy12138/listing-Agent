@@ -3,482 +3,180 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>电商批量生图平台</title>
+    <title>ImageForge — SKU 视觉生产工作台</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 
-<!-- Header -->
-<header class="header">
-    <div class="header-logo">
-        <div class="icon">🎨</div>
-        <h1>ImageForge</h1>
-    </div>
-    <nav class="header-nav">
-        <button class="active" onclick="showPage('dashboard')">数据看板</button>
-        <button onclick="showPage('agent-workbench')">Agent工作台</button>
-        <button onclick="showPage('creative-os')">创意闭环</button>
-        <button onclick="showPage('products')">SKU管理</button>
-        <button onclick="showPage('assets')">图片资产库</button>
-        <button onclick="showPage('workflows')">工作流模板</button>
-        <button onclick="showPage('agents')">Agent配置</button>
+<!-- ===== Top Nav ===== -->
+<nav class="topnav">
+    <div class="topnav-brand"><span class="icon">🎨</span> ImageForge</div>
+    <div class="topnav-links" id="topNav">
+        <button class="active" onclick="showPage('workbench')">SKU工作台</button>
         <button onclick="showPage('tasks')">生图任务</button>
-        <button onclick="showPage('review')">结果审核</button>
-        <button onclick="showPage('settings')">模型服务</button>
-    </nav>
-</header>
+        <button onclick="showPage('assets')">图片资产库</button>
+        <button onclick="showPage('knowledge')">文档知识库</button>
+        <button onclick="showPage('settings')">模型配置</button>
+    </div>
+</nav>
 
-<!-- Toast Container -->
+<!-- Toast -->
 <div class="toast-container" id="toastContainer"></div>
 
-<!-- Main Content -->
-<div class="main">
+<!-- ===== Shell ===== -->
+<div class="shell">
 
-    <!-- Dashboard -->
-    <div id="page-dashboard" class="page active">
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-label">产品总数</div>
-                <div class="stat-value" id="statProducts">0</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">任务总数</div>
-                <div class="stat-value" id="statTasks">0</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">已完成</div>
-                <div class="stat-value" id="statDone">0</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">生成图片</div>
-                <div class="stat-value" id="statImages">0</div>
-            </div>
-        </div>
+<!-- ============================================================ -->
+<!-- PAGE: SKU 工作台                                              -->
+<!-- ============================================================ -->
+<div id="page-workbench" class="page active">
 
-        <div class="card">
-            <div class="card-header">
-                <div class="card-title">SKU 视觉生产操作系统</div>
+    <!-- Left: SKU List -->
+    <aside class="wb-left">
+        <div class="sku-search"><input type="text" id="skuSearchInput" placeholder="搜索 SKU..." oninput="filterSkuList()"></div>
+        <div class="sku-list" id="skuList"></div>
+    </aside>
+
+    <!-- Center -->
+    <section class="wb-center">
+
+        <!-- Header -->
+        <div class="wb-header" id="wbHeader">
+            <div class="wb-header-info">
+                <h2 id="wbSkuTitle">选择一个 SKU 开始</h2>
+                <div class="meta" id="wbSkuMeta"></div>
             </div>
-            <p style="color: var(--text-secondary); margin-bottom: 20px;">
-                以 SKU 为核心串联商品理解、资产处理、视觉策略、Prompt 生成、工作流编排、多模型调度、质检和人工审核。
-            </p>
-            <div class="btn-group" style="margin-top: 16px;">
-                <button class="btn btn-primary" onclick="showPage('products'); openNewProductModal()">新建 SKU</button>
-                <button class="btn btn-secondary" onclick="showPage('tasks')">创建生图任务</button>
+            <div class="wb-header-actions">
+                <button class="btn btn-secondary btn-sm" onclick="openNewProductModal()">＋ 新建 SKU</button>
+                <button class="btn btn-secondary btn-sm" onclick="toast('上传素材功能即将上线','info')">📎 上传素材</button>
+                <button class="btn btn-primary btn-sm" id="btnExplore" onclick="launchExplore()">🔍 发起 Explore</button>
+                <button class="btn btn-secondary btn-sm" id="btnBatch" onclick="toast('请先完成 Explore','info')">📦 进入 Batch</button>
             </div>
         </div>
 
-        <div class="card">
-            <div class="card-header">
-                <div class="card-title">平台执行链路</div>
-                <span class="tag">Agent Pipeline</span>
-            </div>
-            <div class="pipeline-strip" id="pipelineStrip"></div>
+        <!-- Body: Image Plan + Candidates -->
+        <div class="wb-body" id="wbBody">
+            <div id="imagePlanArea"></div>
+            <div id="exploreCandidateArea"></div>
         </div>
 
-        <div class="card">
-            <div class="card-header">
-            <div class="card-title">模型配置</div>
-            </div>
-            <div id="modelConfig" style="display:grid; grid-template-columns: 1fr 1fr; gap: 12px;"></div>
+        <!-- Bottom Chat -->
+        <div class="wb-chat">
+            <textarea class="wb-chat-input" id="chatInput" rows="1" placeholder="告诉 Agent 你想怎么调整当前 SKU / 当前图片，例如：首图1更显大，场景靠墙，加入缅因猫，使用猫爬架Amazon模板。"></textarea>
+            <button class="btn btn-primary btn-sm" onclick="toast('Agent 对话即将上线','info')">发送</button>
         </div>
-    </div>
+    </section>
 
-    <!-- Creative OS Page -->
-    <div id="page-creative-os" class="page">
-        <div class="card-header" style="margin-bottom: 24px;">
-            <div>
-                <div class="card-title" style="font-size: 24px;">创意闭环操作台</div>
-                <p class="muted-copy">策略反推、分层素材、审核标签、实验指标和知识规则。</p>
-            </div>
-            <button class="btn btn-primary" onclick="createCreativeTaskFromFirstSku()">生成策略 Brief</button>
+    <!-- Right: Knowledge Context -->
+    <aside class="wb-right" id="wbRight">
+        <div class="wb-right-header">
+            <h3>📚 知识上下文</h3>
+            <button class="btn-ghost btn-xs" onclick="toggleRightPanel()">收起 ›</button>
         </div>
-        <div class="creative-os-grid">
-            <div class="card">
-                <div class="card-header">
-                    <div class="card-title">策略 Brief</div>
-                    <button class="btn btn-sm btn-secondary" onclick="loadCreativeOS()">刷新</button>
-                </div>
-                <div id="creativeStrategyPanel"></div>
-            </div>
-            <div class="card">
-                <div class="card-header">
-                    <div class="card-title">分层版本</div>
-                    <button class="btn btn-sm btn-secondary" onclick="createTemplateVersionFromFirstSku()">生成模板资产</button>
-                </div>
-                <div id="creativeVersionPanel"></div>
-            </div>
-            <div class="card">
-                <div class="card-header"><div class="card-title">审核反馈</div></div>
-                <div id="creativeReviewPanel"></div>
-            </div>
-            <div class="card">
-                <div class="card-header"><div class="card-title">实验与知识规则</div></div>
-                <div id="creativeLearningPanel"></div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Agent Workbench Page -->
-    <div id="page-agent-workbench" class="page">
-        <div class="workbench-layout">
-            <aside class="workbench-sidebar">
-                <div class="card compact">
-                    <div class="card-title">Agent 蓝图</div>
-                    <p class="muted-copy" id="agentBlueprintDesc">加载中...</p>
-                    <div class="pattern-list" id="agentPatternList"></div>
-                </div>
-                <div class="card compact">
-                    <div class="card-title">启动 Agent Run</div>
-                    <form id="agentRunForm" onsubmit="handleAgentRunSubmit(event)">
-                        <div class="form-group">
-                            <label class="form-label">SKU</label>
-                            <select class="form-select" id="agentSkuSelect" name="sku_id" required></select>
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label">目标</label>
-                            <textarea class="form-textarea" name="objective" rows="3">生成一套可用于跨境电商的 SKU 商品视觉内容</textarea>
-                        </div>
-                        <div class="check-grid">
-                            <label><input type="checkbox" name="image_types" value="main_white_background" checked> 白底主图</label>
-                            <label><input type="checkbox" name="image_types" value="main_scene" checked> 场景首图</label>
-                            <label><input type="checkbox" name="image_types" value="feature_detail" checked> 卖点详情图</label>
-                            <label><input type="checkbox" name="image_types" value="lifestyle"> 生活方式图</label>
-                        </div>
-                        <button class="btn btn-primary" type="submit">启动 Agent</button>
-                    </form>
-                </div>
-            </aside>
-            <section class="workbench-main">
-                <div class="card">
-                    <div class="card-header">
-                        <div>
-                            <div class="card-title">Agent Run</div>
-                            <p class="muted-copy" id="agentRunSummary">启动一个 SKU Agent Run 后，这里会显示状态、步骤、检查点和产物。</p>
-                        </div>
-                        <button class="btn btn-secondary" type="button" onclick="loadAgentRuns()">刷新</button>
-                    </div>
-                    <div class="agent-run-list" id="agentRunList"></div>
-                </div>
-                <div class="card" id="agentRunDetailCard" style="display:none;">
-                    <div class="card-header">
-                        <div class="card-title" id="agentRunDetailTitle">Run Detail</div>
-                        <div class="btn-group inline">
-                            <button class="btn btn-sm btn-secondary" type="button" onclick="renderAgentRunDetail(selectedAgentRun)">刷新详情</button>
-                            <button class="btn btn-sm btn-primary" type="button" onclick="launchGenerationFromRun()">发起生图任务</button>
-                        </div>
-                    </div>
-                    <div id="agentQuestions"></div>
-                    <div class="agent-run-grid">
-                        <div>
-                            <div class="section-label">执行步骤</div>
-                            <div class="agent-step-list" id="agentStepList"></div>
-                        </div>
-                        <div>
-                            <div class="section-label">记忆 / 产物</div>
-                            <div id="agentMemoryPanel"></div>
-                            <div id="agentArtifactPanel"></div>
-                        </div>
-                    </div>
-                </div>
-            </section>
-        </div>
-    </div>
-
-    <!-- Products Page -->
-    <div id="page-products" class="page">
-        <div class="card-header" style="margin-bottom: 24px;">
-            <div class="card-title" style="font-size: 24px;">SKU 管理</div>
-            <button class="btn btn-primary" onclick="openNewProductModal()">新建 SKU</button>
-        </div>
-        <div class="product-grid" id="productGrid"></div>
-        <div id="productEmpty" class="empty-state" style="display:none;">
-            <div class="icon">📦</div>
-            <h3>暂无 SKU</h3>
-            <p>创建你的第一个 SKU 配置，开始批量生图</p>
-            <button class="btn btn-primary" onclick="openNewProductModal()">新建 SKU</button>
-        </div>
-    </div>
-
-    <!-- Assets Page -->
-    <div id="page-assets" class="page">
-        <div class="card-header" style="margin-bottom: 24px;">
-            <div class="card-title" style="font-size: 24px;">图片资产库</div>
-        </div>
-        <div id="assetLibrary"></div>
-    </div>
-
-    <!-- Workflows Page -->
-    <div id="page-workflows" class="page">
-        <div class="card-header" style="margin-bottom: 24px;">
-            <div class="card-title" style="font-size: 24px;">工作流模板中心</div>
-        </div>
-        <div class="workflow-grid" id="workflowGrid"></div>
-    </div>
-
-    <!-- Agents Page -->
-    <div id="page-agents" class="page">
-        <div class="card-header" style="margin-bottom: 24px;">
-            <div class="card-title" style="font-size: 24px;">Agent 配置中心</div>
-        </div>
-        <div class="card">
-            <div class="card-header">
-                <div class="card-title">AI Agent 标准化检查</div>
-                <span class="tag" id="agentComplianceScore">-</span>
-            </div>
-            <p class="muted-copy" id="agentVerdict"></p>
-            <div class="standard-grid" id="agentStandardGrid"></div>
-        </div>
-        <div class="card">
-            <div class="card-header">
-                <div class="card-title">运行时状态与交接策略</div>
-            </div>
-            <div class="runtime-grid" id="runtimeGrid"></div>
-            <div class="handoff-list" id="handoffList"></div>
-        </div>
-        <div class="agent-grid" id="agentGrid"></div>
-    </div>
-
-    <!-- Tasks Page -->
-    <div id="page-tasks" class="page">
-        <div class="card-header" style="margin-bottom: 24px;">
-            <div class="card-title" style="font-size: 24px;">生图任务中心</div>
-            <button class="btn btn-primary" onclick="openNewTaskModal()">新建任务</button>
-        </div>
-        <div class="task-list" id="taskList"></div>
-        <div id="taskEmpty" class="empty-state" style="display:none;">
-            <div class="icon">🚀</div>
-            <h3>暂无任务</h3>
-            <p>选择一个产品，开始生成组图</p>
-            <button class="btn btn-primary" onclick="openNewTaskModal()">新建任务</button>
-        </div>
-    </div>
-
-    <!-- Review Page -->
-    <div id="page-review" class="page">
-        <div class="card-header" style="margin-bottom: 24px;">
-            <div class="card-title" style="font-size: 24px;">结果审核中心</div>
-        </div>
-        <div class="review-list" id="reviewList"></div>
-        <div id="reviewEmpty" class="empty-state" style="display:none;">
-            <div class="icon">✓</div>
-            <h3>暂无待审核结果</h3>
-            <p>任务完成后会在这里进入人工审核队列</p>
-        </div>
-    </div>
-
-    <!-- Settings Page -->
-    <div id="page-settings" class="page">
-        <div class="card-header" style="margin-bottom: 24px;">
-            <div class="card-title" style="font-size: 24px;">模型服务管理</div>
-        </div>
-
-        <!-- API Keys -->
-        <div class="card">
-            <div class="card-header">
-                <div class="card-title">🔑 API 密钥配置</div>
-            </div>
-            <div class="form-grid">
-                <div class="form-group full">
-                    <label class="form-label">OpenAI API Key</label>
-                    <div style="display:flex; gap:10px;">
-                        <input class="form-input" id="settingOpenaiKey" type="password" placeholder="sk-xxx..." style="flex:1;">
-                        <button class="btn btn-sm btn-secondary" onclick="togglePassword('settingOpenaiKey')" type="button">👁</button>
-                        <button class="btn btn-sm btn-secondary" onclick="testConnection('openai')" type="button">🔗 测试</button>
-                    </div>
-                    <div id="testResultOpenai" style="font-size:12px; margin-top:6px;"></div>
-                </div>
-                <div class="form-group full">
-                    <label class="form-label">OpenAI Base URL</label>
-                    <input class="form-input" id="settingOpenaiBaseUrl" placeholder="https://api.openai.com/v1">
-                </div>
-                <div class="form-group full">
-                    <label class="form-label">Google API Key</label>
-                    <div style="display:flex; gap:10px;">
-                        <input class="form-input" id="settingGoogleKey" type="password" placeholder="AIza..." style="flex:1;">
-                        <button class="btn btn-sm btn-secondary" onclick="togglePassword('settingGoogleKey')" type="button">👁</button>
-                        <button class="btn btn-sm btn-secondary" onclick="testConnection('google')" type="button">🔗 测试</button>
-                    </div>
-                    <div id="testResultGoogle" style="font-size:12px; margin-top:6px;"></div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Model Routing -->
-        <div class="card">
-            <div class="card-header">
-                <div class="card-title">🤖 模型路由配置</div>
-                <span class="tag">按任务类型分配模型</span>
-            </div>
-            <div class="form-grid">
-                <div class="form-group">
-                    <label class="form-label">图像生成 (主)</label>
-                    <input class="form-input" id="modelImagePrimary" placeholder="gpt-image-2">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">图像生成 (备)</label>
-                    <input class="form-input" id="modelImageSecondary" placeholder="gemini-3.1-flash-image-preview">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">LLM 推理 (主)</label>
-                    <input class="form-input" id="modelLlmPrimary" placeholder="gemini-3.0-pro-preview">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">LLM 推理 (备)</label>
-                    <input class="form-input" id="modelLlmSecondary" placeholder="gpt-5.2">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">翻译模型</label>
-                    <input class="form-input" id="modelTranslation" placeholder="gemma-4-31b-it">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">质量评估模型</label>
-                    <input class="form-input" id="modelQuality" placeholder="gpt-5.2">
-                </div>
-            </div>
-        </div>
-
-        <!-- Pipeline Parameters -->
-        <div class="card">
-            <div class="card-header">
-                <div class="card-title">⚡ Pipeline 参数</div>
-            </div>
-            <div class="form-grid">
-                <div class="form-group">
-                    <label class="form-label">每步候选数量</label>
-                    <input class="form-input" id="pipelineCandidates" type="number" min="1" max="5" value="2">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">质量检测阈值 (0-1)</label>
-                    <input class="form-input" id="pipelineThreshold" type="number" min="0" max="1" step="0.05" value="0.85">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">最大重试次数</label>
-                    <input class="form-input" id="pipelineRetries" type="number" min="1" max="10" value="3">
-                </div>
-            </div>
-        </div>
-
-        <div class="btn-group">
-            <button class="btn btn-primary" onclick="saveSettings()">💾 保存设置</button>
-            <button class="btn btn-secondary" onclick="loadSettings()">↩️ 重置</button>
-        </div>
-    </div>
+        <div class="wb-right-body" id="wbRightBody"></div>
+    </aside>
 </div>
 
+<!-- ============================================================ -->
+<!-- PAGE: 生图任务                                                -->
+<!-- ============================================================ -->
+<div id="page-tasks" class="page tasks-page">
+    <div class="tasks-header">
+        <h2>生图任务</h2>
+        <button class="btn btn-primary" onclick="openNewTaskModal()">＋ 新建任务</button>
+    </div>
+    <div class="tasks-body" id="taskListArea"></div>
+</div>
+
+<!-- ============================================================ -->
+<!-- PAGE: 图片资产库                                              -->
+<!-- ============================================================ -->
+<div id="page-assets" class="page assets-page">
+    <div class="assets-header">
+        <h2>图片资产库</h2>
+    </div>
+    <div class="assets-body" id="assetLibraryArea"></div>
+</div>
+
+<!-- ============================================================ -->
+<!-- PAGE: 文档知识库                                              -->
+<!-- ============================================================ -->
+<div id="page-knowledge" class="page kb-page">
+    <div class="kb-header">
+        <h2>文档知识库</h2>
+        <div class="kb-tabs" id="kbTabs">
+            <button class="active" onclick="showKbTab('category')">品类知识库</button>
+            <button onclick="showKbTab('inspiration')">素材灵感库</button>
+            <button onclick="showKbTab('standard')">标准素材库</button>
+        </div>
+    </div>
+    <div class="kb-body" id="kbBody"></div>
+</div>
+
+<!-- ============================================================ -->
+<!-- PAGE: 模型配置                                                -->
+<!-- ============================================================ -->
+<div id="page-settings" class="page settings-page">
+    <div class="settings-body" id="settingsBody"></div>
+</div>
+
+</div><!-- /shell -->
+
+<!-- ===== Modals ===== -->
 <!-- New Product Modal -->
 <div class="modal-overlay" id="productModal">
     <div class="modal">
-        <div class="modal-header">
-            <h2>➕ 新建产品</h2>
-            <button class="modal-close" onclick="closeModal('productModal')">✕</button>
-        </div>
-        <form id="productForm" onsubmit="handleProductSubmit(event)">
-            <div class="form-grid">
-                <div class="form-group">
-                    <label class="form-label">产品编号 *</label>
-                    <input class="form-input" name="product_id" placeholder="如 PCT020" required>
-                </div>
-                <div class="form-group">
-                    <label class="form-label">产品名称 *</label>
-                    <input class="form-input" name="name" placeholder="如 205cm XXL Cat Tree" required>
-                </div>
-                <div class="form-group full">
-                    <label class="form-label">产品描述</label>
-                    <textarea class="form-textarea" name="description" placeholder="产品详细描述..."></textarea>
-                </div>
-                <div class="form-group">
-                    <label class="form-label">目标人群</label>
-                    <input class="form-input" name="target_audience" placeholder="如 大猫家庭、多猫家庭">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">产品定位</label>
-                    <input class="form-input" name="positioning" placeholder="如 高端、大型">
-                </div>
-                <div class="form-group full">
-                    <label class="form-label">卖点 (每行一个)</label>
-                    <textarea class="form-textarea" name="selling_points" rows="5" placeholder="每行输入一个卖点..."></textarea>
-                </div>
-                <div class="form-group full">
-                    <label class="form-label">关键词 (用逗号分隔)</label>
-                    <input class="form-input" name="keywords" placeholder="cat tree, cat tower, ...">
-                </div>
-                <div class="form-group full">
-                    <label class="form-label">场景需求</label>
-                    <textarea class="form-textarea" name="scene_requirements" placeholder="描述期望的场景风格..."></textarea>
-                </div>
-                <div class="form-group full">
-                    <label class="form-label">产品图片</label>
-                    <div class="upload-zone" id="productUploadZone">
-                        <div class="icon">📷</div>
-                        <div class="text">拖拽图片到此处，或 <strong>点击上传</strong></div>
-                        <input type="file" name="product_image" accept="image/*" onchange="handleImagePreview(event, 'productUploadZone')">
+        <div class="modal-header"><h2>新建 SKU</h2><button class="modal-close" onclick="closeModal('productModal')">✕</button></div>
+        <div class="modal-body">
+            <form id="productForm" onsubmit="handleProductSubmit(event)">
+                <div class="form-grid">
+                    <div class="form-group"><label class="form-label">产品编号 *</label><input class="form-input" name="product_id" placeholder="如 PCT020" required></div>
+                    <div class="form-group"><label class="form-label">产品名称 *</label><input class="form-input" name="name" placeholder="如 205cm XXL Cat Tree" required></div>
+                    <div class="form-group full"><label class="form-label">产品描述</label><textarea class="form-textarea" name="description" rows="2" placeholder="产品详细描述..."></textarea></div>
+                    <div class="form-group"><label class="form-label">目标人群</label><input class="form-input" name="target_audience" placeholder="大猫家庭、多猫家庭"></div>
+                    <div class="form-group"><label class="form-label">产品定位</label><input class="form-input" name="positioning" placeholder="高端、大型"></div>
+                    <div class="form-group full"><label class="form-label">卖点 (每行一个)</label><textarea class="form-textarea" name="selling_points" rows="3"></textarea></div>
+                    <div class="form-group full"><label class="form-label">产品图片</label>
+                        <div class="upload-zone" id="productUploadZone">
+                            <div class="icon">📷</div><div class="text">拖拽图片到此处，或 <strong>点击上传</strong></div>
+                            <input type="file" name="product_image" accept="image/*" onchange="handleImagePreview(event,'productUploadZone')">
+                        </div>
                     </div>
                 </div>
-            </div>
-            <div class="btn-group">
-                <button type="submit" class="btn btn-primary">💾 保存产品</button>
-                <button type="button" class="btn btn-secondary" onclick="closeModal('productModal')">取消</button>
-            </div>
-        </form>
+                <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('productModal')">取消</button>
+                    <button type="submit" class="btn btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
     </div>
 </div>
 
 <!-- New Task Modal -->
 <div class="modal-overlay" id="taskModal">
     <div class="modal">
-        <div class="modal-header">
-            <h2>🚀 新建生图任务</h2>
-            <button class="modal-close" onclick="closeModal('taskModal')">✕</button>
-        </div>
-        <form id="taskForm" onsubmit="handleTaskSubmit(event)">
-            <div class="form-grid">
-                <div class="form-group">
-                    <label class="form-label">选择产品 *</label>
-                    <select class="form-select" name="product_id" id="taskProductSelect" required>
-                        <option value="">-- 选择产品 --</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label class="form-label">图像模型</label>
-                    <select class="form-select" name="model">
-                        <option value="gpt-image-2">gpt-image-2 (高质量)</option>
-                        <option value="gemini-3.1-flash-image-preview">gemini-3.1-flash-image-preview (快速)</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label class="form-label">场景数量</label>
-                    <select class="form-select" name="scene_count">
-                        <option value="2">2 个场景</option>
-                        <option value="3" selected>3 个场景</option>
-                        <option value="5">5 个场景</option>
-                    </select>
-                </div>
-                <div class="form-group full">
-                    <label class="form-label">产品图片 *</label>
-                    <div class="upload-zone" id="taskUploadZone">
-                        <div class="icon">📷</div>
-                        <div class="text">拖拽产品白图到此处，或 <strong>点击上传</strong></div>
-                        <input type="file" name="product_image" accept="image/*" onchange="handleImagePreview(event, 'taskUploadZone')">
+        <div class="modal-header"><h2>新建生图任务</h2><button class="modal-close" onclick="closeModal('taskModal')">✕</button></div>
+        <div class="modal-body">
+            <form id="taskForm" onsubmit="handleTaskSubmit(event)">
+                <div class="form-grid">
+                    <div class="form-group"><label class="form-label">选择产品 *</label>
+                        <select class="form-select" name="product_id" id="taskProductSelect" required><option value="">-- 选择 --</option></select>
+                    </div>
+                    <div class="form-group"><label class="form-label">模式</label>
+                        <select class="form-select" name="mode"><option value="explore" selected>Explore 候选</option><option value="batch">Batch 批量</option></select>
+                    </div>
+                    <div class="form-group"><label class="form-label">图像模型</label>
+                        <select class="form-select" name="model"><option value="gpt-image-2">gpt-image-2</option></select>
                     </div>
                 </div>
-            </div>
-            <div class="btn-group">
-                <button type="submit" class="btn btn-primary">🚀 开始生图</button>
-                <button type="button" class="btn btn-secondary" onclick="closeModal('taskModal')">取消</button>
-            </div>
-        </form>
-    </div>
-</div>
-
-<!-- Task Detail Modal -->
-<div class="modal-overlay" id="taskDetailModal">
-    <div class="modal" style="max-width: 1000px;">
-        <div class="modal-header">
-            <h2 id="taskDetailTitle">📋 任务详情</h2>
-            <button class="modal-close" onclick="closeModal('taskDetailModal')">✕</button>
+                <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('taskModal')">取消</button>
+                    <button type="submit" class="btn btn-primary">🚀 开始</button>
+                </div>
+            </form>
         </div>
-        <div id="taskDetailContent"></div>
     </div>
 </div>
 
