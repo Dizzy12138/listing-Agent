@@ -95,29 +95,49 @@ function renderWorkbench() {
     if (!currentSku) return;
     const s = currentSku;
     document.getElementById('wbSkuTitle').textContent = `${s.product_id}｜${s.name || ''}`;
-    document.getElementById('wbSkuMeta').innerHTML = `<span>品类：${s.category || 'Cat Tree / Cat Tower'}</span><span>定位：${(s.selling_points || []).slice(0, 3).join('、') || '高端大型猫爬架'}</span><span>关联知识库：猫爬架 Amazon 上货图通用提示词模板</span>`;
+    document.getElementById('wbSkuMeta').innerHTML = `<span>品类：${s.category || '-'}</span><span>定位：${(s.selling_points || []).slice(0, 3).join('、') || '-'}</span>`;
     renderImagePlan();
     renderRightPanel();
 }
 
 /* ===== Image Plan ===== */
-const IMAGE_PLAN = [
-    { key: 'hero_scene', label: '首图1', type: 'Hero Scene' },
-    { key: 'hero_scene_2', label: '首图2', type: 'Hero Scene' },
-    { key: 'lifestyle_scene', label: '场景图1', type: 'Lifestyle Scene' },
-    { key: 'lifestyle_scene_2', label: '场景图2', type: 'Lifestyle Scene' },
-    { key: 'material_plush', label: '材质图1', type: 'Material Detail' },
-    { key: 'material_sisal', label: '材质图2', type: 'Material Detail' },
-    { key: 'size_compare', label: '尺寸图', type: 'Size Compare' },
-    { key: 'selling_1', label: '卖点图1', type: 'Selling Point' },
-    { key: 'selling_2', label: '卖点图2', type: 'Selling Point' },
-];
+let currentExploreData = null;
 
-function renderImagePlan() {
+async function renderImagePlan() {
     const area = document.getElementById('imagePlanArea');
-    area.innerHTML = `<div class="plan-section-title">📋 图片计划 <span class="count">${IMAGE_PLAN.length} 张</span></div>
-    <div class="plan-grid">${IMAGE_PLAN.map(p => imgCard(p.label, p.type, '2000×2000')).join('')}</div>`;
-    renderExploreCandidates();
+    // Try to load real explore data for this SKU
+    currentExploreData = null;
+    if (currentSku) {
+        try {
+            const r = await fetch('/api/tasks');
+            const d = await r.json();
+            const tasks = (d.tasks || []).filter(t => t.product_id === currentSku.product_id && t.mode === 'explore');
+            if (tasks.length) {
+                const latest = tasks[tasks.length - 1];
+                const er = await fetch(`/api/tasks/${latest.task_id}/explore`);
+                currentExploreData = await er.json();
+            }
+        } catch {}
+    }
+    if (currentExploreData && currentExploreData.candidates) {
+        const types = Object.keys(currentExploreData.candidates);
+        area.innerHTML = `<div class="plan-section-title">📋 图片计划 <span class="count">${types.length} 组</span></div>
+        <div class="plan-grid">${types.map(t => {
+            const g = currentExploreData.candidates[t];
+            const rec = g.recommendation;
+            const imgSrc = rec ? rec.image_url : (g.candidates[0]?.image_url || null);
+            const scores = rec?.qa_scores ? {c:rec.qa_scores.commercial||0, k:rec.qa_scores.consistency||0, d:rec.qa_scores.defect||0} : null;
+            return imgCard(t, '', '2000×2000', imgSrc, scores, rec ? 'recommended' : null);
+        }).join('')}</div>`;
+        renderExploreCandidates();
+    } else {
+        area.innerHTML = `<div class="plan-section-title">📋 图片计划</div>
+        <div style="text-align:center;padding:40px;color:var(--text-muted);font-size:13px;">
+            <div style="font-size:32px;margin-bottom:12px;">📷</div>
+            尚无图片计划<br>点击「启动 Explore」生成候选图
+        </div>`;
+        document.getElementById('exploreCandidateArea').innerHTML = '';
+    }
 }
 
 function imgCard(label, type, size, imgSrc, scores, badge) {
@@ -143,34 +163,24 @@ function imgCard(label, type, size, imgSrc, scores, badge) {
 function scoreClass(v) { return v >= 85 ? 'high' : v >= 65 ? 'mid' : 'low'; }
 
 /* ===== Explore Candidates ===== */
-const MOCK_EXPLORE = [
-    { group: '首图 Hero Scene', candidates: [
-        { id: '首图1 - 候选1', scores: { c: 92, k: 88, d: 78 }, badge: 'candidate' },
-        { id: '首图1 - 候选2', scores: { c: 92, k: 90, d: 86 }, badge: 'recommended' },
-        { id: '首图1 - 候选3', scores: { c: 92, k: 94, d: 78 }, badge: 'recommended' },
-        { id: '首图1 - 候选4', scores: { c: 92, k: 88, d: 78 }, badge: 'candidate' },
-    ]},
-    { group: '生活方式 Lifestyle Scene', candidates: [
-        { id: '场景图1 - 候选1', scores: { c: 88, k: 83, d: 62 }, badge: 'candidate' },
-        { id: '场景图1 - 候选2', scores: { c: 85, k: 82, d: 60 }, badge: 'candidate' },
-        { id: '场景图1 - 候选3', scores: { c: 88, k: 92, d: 62 }, badge: 'candidate' },
-        { id: '场景图1 - 候选4', scores: { c: 92, k: 90, d: 85 }, badge: 'recommended' },
-    ]},
-    { group: '材质细节 Material Detail', candidates: [
-        { id: '材质图1 - 候选1', scores: { c: 78, k: 34, d: 90 }, badge: 'candidate' },
-        { id: '材质图1 - 候选2', scores: { c: 78, k: 22, d: 92 }, badge: 'failed' },
-        { id: '材质图1 - 候选3', scores: { c: 90, k: 68, d: 92 }, badge: 'candidate' },
-        { id: '材质图1 - 候选4', scores: { c: 88, k: 62, d: 92 }, badge: 'candidate' },
-    ]},
-];
-
 function renderExploreCandidates() {
     const area = document.getElementById('exploreCandidateArea');
-    area.innerHTML = `<div class="plan-section-title" style="margin-top:12px">🔍 Explore 候选图 <span class="count">3 组 × 4 候选</span></div>` +
-        MOCK_EXPLORE.map(g => `<div style="margin-bottom:8px;font-size:13px;font-weight:600;">${g.group}</div>
-        <div class="candidate-row">${g.candidates.map(c =>
-            imgCard(c.id, '', '2000×2000', null, c.scores, c.badge)
-        ).join('')}</div>`).join('');
+    if (!currentExploreData || !currentExploreData.candidates) {
+        area.innerHTML = '';
+        return;
+    }
+    const types = Object.keys(currentExploreData.candidates);
+    area.innerHTML = `<div class="plan-section-title" style="margin-top:12px">🔍 Explore 候选图 <span class="count">${types.length} 组</span></div>` +
+        types.map(t => {
+            const g = currentExploreData.candidates[t];
+            const cands = g.candidates || [];
+            return `<div style="margin-bottom:8px;font-size:13px;font-weight:600;">${t}</div>
+            <div class="candidate-row">${cands.map(c => {
+                const scores = c.qa_scores ? {c:c.qa_scores.commercial||0, k:c.qa_scores.consistency||0, d:c.qa_scores.defect||0} : null;
+                const badge = g.recommendation?.image_url === c.image_url ? 'recommended' : 'candidate';
+                return imgCard(c.name||t, '', '2000×2000', c.image_url, scores, badge);
+            }).join('')}</div>`;
+        }).join('');
 }
 
 /* ===== Right Panel ===== */
@@ -179,43 +189,54 @@ function toggleRightPanel() {
     r.classList.toggle('collapsed');
 }
 
-function renderRightPanel() {
+async function renderRightPanel() {
     const body = document.getElementById('wbRightBody');
-    body.innerHTML = `
-    <div class="ctx-section">
-        <div class="ctx-section-title">📂 当前品类知识</div>
-        <div class="ctx-item"><span class="label">品类路径</span>Pet Supplies &gt; Cat Supplies &gt; Cat Furniture &gt; Cat Tree / Cat Tower / Cat Condo</div>
-        <div class="ctx-item"><span class="label">文档名称</span>猫爬架 Amazon 上货图通用提示词模板</div>
-        <div class="ctx-item"><span class="label">全局规则</span>保持产品结构、比例、颜色、材质、功能部件一致；不要重设计产品</div>
-        <div class="ctx-item"><span class="label">场景规则</span>靠墙摆放；明显窗户光源；上午阳光；现代美国住宅风格</div>
-        <div class="ctx-item"><span class="label">图形规则</span>橙色辅助色；宠物图标；手绘元素轻量使用</div>
-        <div class="ctx-item"><span class="label">负面规则</span>
-            <div><span class="ctx-tag">不改变材质</span><span class="ctx-tag">不改变结构</span><span class="ctx-tag">不遮挡核心结构</span><span class="ctx-tag">不用深色光照</span><span class="ctx-tag">不加水印</span></div>
-        </div>
-        <div class="ctx-item"><span class="label">检查清单</span>
-            <ul class="ctx-checklist">
-                <li>产品主体结构完整可识别</li>
-                <li>颜色和材质与原图一致</li>
-                <li>底座稳固感明确</li>
-                <li>无多余文字/水印</li>
-                <li>光照自然、阴影合理</li>
-            </ul>
-        </div>
-    </div>
-    <div class="ctx-section">
-        <div class="ctx-section-title">🎨 素材选择</div>
-        <div class="ctx-item"><span class="label">素材灵感库</span><span class="ctx-tag">竞品参考 ×3</span></div>
-        <div class="ctx-item"><span class="label">标准素材库</span><span class="ctx-tag">图标包</span><span class="ctx-tag">品牌色</span></div>
-        <div class="ctx-item"><span class="label">手绘装饰</span><span class="ctx-tag">轻量爪印</span></div>
-    </div>
+    // Load knowledge docs and find matching ones
+    let docs = [];
+    try { const r = await fetch('/api/knowledge-docs'); docs = (await r.json()).docs || []; } catch {}
+    const parsed = docs.filter(d => d.parse_status === 'parsed');
+    // Load asset packs
+    let packs = [];
+    try { const r = await fetch('/api/asset-packs'); packs = (await r.json()).packs || []; } catch {}
+    const confirmedPacks = packs.filter(p => p.parse_status === 'parsed');
+
+    // Knowledge section
+    let knowledgeHtml = '';
+    if (parsed.length) {
+        const doc = parsed[0];
+        let k = doc.parsed_knowledge || {};
+        if (!Object.keys(k).length && doc.doc_id) {
+            try { const r = await fetch(`/api/knowledge-docs/${doc.doc_id}/summary`); const d = await r.json(); k = d.knowledge || {}; } catch {}
+        }
+        knowledgeHtml = `<div class="ctx-section"><div class="ctx-section-title">📂 品类知识 · ${doc.name}</div>
+            ${k.category_path ? `<div class="ctx-item"><span class="label">品类路径</span>${k.category_path}</div>` : ''}
+            ${(k.global_rules||[]).length ? `<div class="ctx-item"><span class="label">全局规则</span>${k.global_rules.map(r=>'<div>• '+r+'</div>').join('')}</div>` : ''}
+            ${(k.scene_rules||[]).length ? `<div class="ctx-item"><span class="label">场景规则</span>${k.scene_rules.map(r=>'<div>• '+r+'</div>').join('')}</div>` : ''}
+            ${(k.negative_prompts||[]).length ? `<div class="ctx-item"><span class="label">负面规则</span><div>${k.negative_prompts.map(r=>'<span class="ctx-tag">'+r+'</span>').join('')}</div></div>` : ''}
+            ${(k.checklist||[]).length ? `<div class="ctx-item"><span class="label">检查清单</span><ul class="ctx-checklist">${k.checklist.map(c=>'<li>'+c+'</li>').join('')}</ul></div>` : ''}
+        </div>`;
+    } else {
+        knowledgeHtml = `<div class="ctx-section"><div class="ctx-section-title">📂 品类知识</div>
+            <div style="padding:16px;text-align:center;color:var(--text-muted);font-size:12px;">暂无已解析的知识文档<br><a href="#" onclick="showPage('knowledge');return false;">去上传文档</a></div></div>`;
+    }
+
+    // Assets section
+    let assetsHtml = '';
+    if (confirmedPacks.length) {
+        assetsHtml = `<div class="ctx-section"><div class="ctx-section-title">🎨 素材包 (${confirmedPacks.length})</div>
+            ${confirmedPacks.map(p => `<div class="ctx-item"><span class="label">${p.name}</span><span class="ctx-tag">${p.item_count} 项</span></div>`).join('')}</div>`;
+    } else {
+        assetsHtml = `<div class="ctx-section"><div class="ctx-section-title">🎨 素材包</div>
+            <div style="padding:16px;text-align:center;color:var(--text-muted);font-size:12px;">暂无素材包<br><a href="#" onclick="showPage('assets');return false;">去上传素材</a></div></div>`;
+    }
+
+    body.innerHTML = knowledgeHtml + assetsHtml + `
     <div class="ctx-section">
         <div class="ctx-section-title">⚙️ Agent 设置</div>
         <div class="agent-mini-form">
-            <div class="row"><span class="label">SKU一致性等级</span><span class="value">medium_high</span></div>
             <div class="row"><span class="label">生成模式</span><span class="value">Explore</span></div>
             <div class="row"><span class="label">候选数量</span><span class="value">4</span></div>
             <div class="row"><span class="label">尺寸</span><span class="value">2000×2000</span></div>
-            <div class="row"><span class="label">品类模板</span><span class="value">Cat Tree Amazon</span></div>
         </div>
     </div>`;
 }
@@ -406,42 +427,30 @@ async function renderKbCategory(el) {
 }
 
 function renderKbInspiration(el) {
-    const items = [
-        { name: 'Amazon Top 1 Cat Tree Listing', type: '竞品图', cat: 'Cat Tree', tags: ['hero', 'lifestyle'] },
-        { name: '现代客厅猫爬架场景', type: '风格图', cat: 'Cat Tree', tags: ['scene', 'interior'] },
-        { name: '宠物摄影灯光参考', type: '场景图', cat: 'Pet', tags: ['lighting', 'studio'] },
-        { name: 'Infographic 排版参考', type: '排版参考', cat: 'General', tags: ['layout', 'info'] },
-    ];
     el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <div style="font-size:15px;font-weight:600;">素材灵感库</div>
-        <button class="btn btn-primary btn-sm" onclick="toast('上传素材功能即将上线','info')">📎 上传素材</button>
     </div>
-    <div class="insp-grid">${items.map(i => `<div class="insp-card">
-        <div class="insp-card-img">🎨</div>
-        <div class="insp-card-body">
-            <h4>${i.name}</h4>
-            <div class="meta"><span class="tag tag-gray">${i.type}</span> <span class="tag tag-blue">${i.cat}</span></div>
-            <div style="margin-top:6px">${i.tags.map(t => `<span class="ctx-tag">${t}</span>`).join('')}</div>
-        </div>
-    </div>`).join('')}</div>`;
+    <div style="text-align:center;padding:40px;color:var(--text-muted);font-size:13px;"><div style="font-size:28px;margin-bottom:8px;">🎨</div>暂无灵感素材<br>后续版本支持上传竞品参考图</div>`;
 }
 
-function renderKbStandard(el) {
-    const items = [
-        { name: '宠物图标包', type: '图标包', enabled: true },
-        { name: '手绘爪印装饰', type: '手绘元素', enabled: true },
-        { name: 'Brand Orange #FF6B35', type: '品牌色', enabled: true },
-        { name: 'Logo 透明底', type: 'Logo', enabled: false },
-        { name: '标准尺寸线样式', type: '尺寸标注', enabled: true },
-        { name: 'Amazon Infographic 组件', type: '版式组件', enabled: false },
-    ];
+async function renderKbStandard(el) {
+    let packs = [];
+    try { const r = await fetch('/api/asset-packs'); packs = (await r.json()).packs || []; } catch {}
+    if (!packs.length) {
+        el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+            <div style="font-size:15px;font-weight:600;">标准素材库</div>
+            <button class="btn btn-primary btn-sm" onclick="showPage('assets')">📎 管理素材包</button>
+        </div>
+        <div style="text-align:center;padding:40px;color:var(--text-muted);font-size:13px;"><div style="font-size:28px;margin-bottom:8px;">📦</div>暂无素材包<br>请到「图片资产库」上传 PDF 素材包</div>`;
+        return;
+    }
     el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <div style="font-size:15px;font-weight:600;">标准素材库</div>
-        <button class="btn btn-primary btn-sm" onclick="toast('上传素材功能即将上线','info')">📎 上传素材</button>
+        <button class="btn btn-primary btn-sm" onclick="showPage('assets')">📎 管理素材包</button>
     </div>
-    <table class="data-table"><thead><tr><th>素材名称</th><th>类型</th><th>预览</th><th>默认启用</th></tr></thead><tbody>
-    ${items.map(i => `<tr><td><strong>${i.name}</strong></td><td><span class="tag tag-gray">${i.type}</span></td><td style="font-size:20px">🎨</td>
-        <td>${i.enabled ? '<span class="tag tag-green">启用</span>' : '<span class="tag tag-gray">未启用</span>'}</td></tr>`).join('')}
+    <table class="data-table"><thead><tr><th>素材包</th><th>类型</th><th>素材项</th><th>状态</th></tr></thead><tbody>
+    ${packs.map(p => `<tr><td><strong>${p.name}</strong></td><td><span class="tag tag-gray">${p.type||'pdf'}</span></td><td>${p.item_count}</td>
+        <td><span class="tag ${p.parse_status==='parsed'?'tag-green':'tag-yellow'}">${p.parse_status==='parsed'?'已解析':'待解析'}</span></td></tr>`).join('')}
     </tbody></table>`;
 }
 
