@@ -35,7 +35,10 @@
 
     <!-- Left: SKU List -->
     <aside class="wb-left">
-        <div class="sku-search"><input type="text" id="skuSearchInput" placeholder="搜索 SKU..." oninput="filterSkuList()"></div>
+        <div class="sku-search">
+            <input type="text" id="skuSearchInput" placeholder="搜索 SKU..." oninput="filterSkuList()">
+            <button class="btn btn-primary btn-sm" onclick="openNewProductModal()" title="新建 SKU" style="padding:4px 10px;font-size:16px;line-height:1;">＋</button>
+        </div>
         <div class="sku-list" id="skuList"></div>
     </aside>
 
@@ -49,8 +52,6 @@
                 <div class="meta" id="wbSkuMeta"></div>
             </div>
             <div class="wb-header-actions">
-                <button class="btn btn-secondary btn-sm" onclick="openNewProductModal()">＋ 新建 SKU</button>
-                <button class="btn btn-secondary btn-sm" onclick="toast('上传素材功能即将上线','info')">📎 上传素材</button>
                 <button class="btn btn-primary btn-sm" id="btnExplore" onclick="launchExplore()">🔍 发起 Explore</button>
                 <button class="btn btn-secondary btn-sm" id="btnBatch" onclick="toast('请先完成 Explore','info')">📦 进入 Batch</button>
             </div>

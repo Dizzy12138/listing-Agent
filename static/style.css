@@ -87,9 +87,10 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
 /* ===== Left SKU List ===== */
 .sku-search {
   padding: 12px; border-bottom: 1px solid var(--border-light);
+  display: flex; gap: 8px; align-items: center;
 }
 .sku-search input {
-  width: 100%; padding: 8px 12px; border: 1px solid var(--border);
+  flex: 1; min-width: 0; padding: 8px 12px; border: 1px solid var(--border);
   border-radius: var(--radius); background: var(--bg-card); font-size: 13px;
   outline: none; transition: var(--transition);
 }
