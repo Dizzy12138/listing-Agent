@@ -380,21 +380,72 @@ async function handlePackUpload(e) {
     const files = form.querySelector('input[type=file]').files;
     if (!files.length) { toast('请选择文件','info'); return; }
     const fd = new FormData();
-    // Support multiple files — send all as 'file' entries
     for (const f of files) fd.append('file', f);
     fd.append('name', form.querySelector('input[name=name]')?.value || '');
     fd.append('category', form.querySelector('input[name=category]')?.value || '');
     fd.append('usage', form.querySelector('input[name=usage]')?.value || '');
+
+    // Show progress bar
+    const btn = form.querySelector('button[type=submit]');
+    const origText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `<span class="upload-progress-text">上传中... 0%</span><div class="upload-progress-bar"><div class="upload-progress-fill" style="width:0%"></div></div>`;
+
     try {
-        const r = await fetch('/api/asset-packs/upload',{method:'POST',body:fd});
-        if (!r.ok) { const t = await r.text(); throw new Error(t); }
-        const d = await r.json();
-        closeModal('uploadPackModal');
-        form.reset();
+        const result = await uploadWithProgress('/api/asset-packs/upload', fd, (pct) => {
+            btn.querySelector('.upload-progress-text').textContent = `上传中... ${pct}%`;
+            btn.querySelector('.upload-progress-fill').style.width = pct + '%';
+        });
+        const d = JSON.parse(result);
+        btn.innerHTML = '解析中...';
         toast('素材包上传成功，开始解析...','success');
         await fetch('/api/asset-packs/'+d.pack.asset_pack_id+'/parse',{method:'POST'});
-        setTimeout(renderAssets, 3000);
-    } catch(err) { toast('上传失败: '+err.message,'error'); }
+        closeModal('uploadPackModal');
+        form.reset();
+        btn.disabled = false;
+        btn.innerHTML = origText;
+        pollPackStatus(d.pack.asset_pack_id);
+    } catch(err) {
+        toast('上传失败: '+err.message,'error');
+        btn.disabled = false;
+        btn.innerHTML = origText;
+    }
+}
+
+function uploadWithProgress(url, formData, onProgress) {
+    return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.upload.addEventListener('progress', (e) => {
+            if (e.lengthComputable) onProgress(Math.round(e.loaded / e.total * 100));
+        });
+        xhr.addEventListener('load', () => {
+            if (xhr.status >= 200 && xhr.status < 300) resolve(xhr.responseText);
+            else reject(new Error(xhr.statusText || `HTTP ${xhr.status}`));
+        });
+        xhr.addEventListener('error', () => reject(new Error('网络错误')));
+        xhr.open('POST', url);
+        xhr.send(formData);
+    });
+}
+
+function pollPackStatus(packId, maxRetries = 20) {
+    let retries = 0;
+    renderAssets();
+    const interval = setInterval(async () => {
+        retries++;
+        try {
+            const r = await fetch('/api/asset-packs/' + packId);
+            const p = await r.json();
+            if (p.parse_status === 'parsed' || p.parse_status === 'error' || retries >= maxRetries) {
+                clearInterval(interval);
+                renderAssets();
+                if (p.parse_status === 'parsed') toast(`解析完成：${p.item_count} 个素材项`, 'success');
+                else if (p.parse_status === 'error') toast('解析失败: ' + (p.error||''), 'error');
+            } else {
+                renderAssets();
+            }
+        } catch { if (retries >= maxRetries) clearInterval(interval); }
+    }, 3000);
 }
 
 /* ===== Knowledge Base ===== */
@@ -522,15 +573,52 @@ async function viewDocSummary(docId) {
 }
 async function handleDocUpload(e) {
     e.preventDefault();
-    const fd = new FormData(e.target);
+    const form = e.target;
+    const fd = new FormData(form);
+    const btn = form.querySelector('button[type=submit]');
+    const origText = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `<span class="upload-progress-text">上传中... 0%</span><div class="upload-progress-bar"><div class="upload-progress-fill" style="width:0%"></div></div>`;
+
     try {
-        const r = await fetch('/api/knowledge-docs/upload',{method:'POST',body:fd});
-        const d = await r.json();
-        closeModal('uploadDocModal');
-        toast('文档上传成功','success');
+        const result = await uploadWithProgress('/api/knowledge-docs/upload', fd, (pct) => {
+            btn.querySelector('.upload-progress-text').textContent = `上传中... ${pct}%`;
+            btn.querySelector('.upload-progress-fill').style.width = pct + '%';
+        });
+        const d = JSON.parse(result);
+        btn.innerHTML = '解析中...';
+        toast('文档上传成功，开始解析...','success');
         await fetch('/api/knowledge-docs/'+d.doc.doc_id+'/analyze',{method:'POST'});
-        setTimeout(()=>renderKb(), 2000);
-    } catch(err) { toast('上传失败','error'); }
+        closeModal('uploadDocModal');
+        form.reset();
+        btn.disabled = false;
+        btn.innerHTML = origText;
+        pollDocStatus(d.doc.doc_id);
+    } catch(err) {
+        toast('上传失败: '+err.message,'error');
+        btn.disabled = false;
+        btn.innerHTML = origText;
+    }
+}
+
+function pollDocStatus(docId, maxRetries = 20) {
+    let retries = 0;
+    renderKb();
+    const interval = setInterval(async () => {
+        retries++;
+        try {
+            const r = await fetch('/api/knowledge-docs/' + docId);
+            const d = await r.json();
+            if (d.parse_status === 'parsed' || d.parse_status === 'error' || retries >= maxRetries) {
+                clearInterval(interval);
+                renderKb();
+                if (d.parse_status === 'parsed') toast(`解析完成：${d.rule_count} 条规则，${d.checklist_count} 条检查项`, 'success');
+                else if (d.parse_status === 'error') toast('解析失败', 'error');
+            } else {
+                renderKb();
+            }
+        } catch { if (retries >= maxRetries) clearInterval(interval); }
+    }, 3000);
 }
 
 /* ===== Init ===== */

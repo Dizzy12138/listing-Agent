@@ -1,0 +1,50 @@
+[
+  {
+    "asset_item_id": "item_pack_f94edeb9_000",
+    "asset_pack_id": "pack_f94edeb9",
+    "name": "页面_1",
+    "type": "graphic",
+    "tags": [],
+    "bbox": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "page": 1,
+    "preview_url": "",
+    "svg_url": "",
+    "png_url": "",
+    "description": "狗牌铃铛家爱心狗\n产品\n功能\n包装\n骨头猫 小鱼干\n罐头 梳子\n防水 耐磨 柔软 可水洗 睡觉舒适 易打扫\n向上 易碎 怕湿\n客厅 门\n香味爱护环境 环保 锁住味道\n防倾倒\n加粗栏杆\n调节脚\n卧室 门厅\n干净整洁 拉链\n 不可水洗\n大空间\n填充饱满 可拆卸 透气\n食盆 食盆\n猫兜猫树 猫砂盆 猫抓板狗尿垫狗笼 狗窝 狗包\n无异味有异味\n防异味 笑脸 哭脸\n床 汽车1沙发1 防滑 洗碗机\n有声音 织",
+    "applicable_image_types": [
+      "listing_info_graph",
+      "feature_icon"
+    ],
+    "status": "available",
+    "created_at": "2026-04-28T19:43:09"
+  },
+  {
+    "asset_item_id": "item_pack_f94edeb9_001",
+    "asset_pack_id": "pack_f94edeb9",
+    "name": "页面_2",
+    "type": "graphic",
+    "tags": [],
+    "bbox": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "page": 2,
+    "preview_url": "",
+    "svg_url": "",
+    "png_url": "",
+    "description": "易擦拭透气 防晒",
+    "applicable_image_types": [
+      "listing_info_graph",
+      "feature_icon"
+    ],
+    "status": "available",
+    "created_at": "2026-04-28T19:43:09"
+  }
+]

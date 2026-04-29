@@ -971,6 +971,14 @@ async def api_list_packs():
     return {"packs": list_packs()}
 
 
+@app.get("/api/asset-packs/{pack_id}")
+async def api_get_pack(pack_id: str):
+    from core.services.asset_service import get_pack
+    pack = get_pack(pack_id)
+    if not pack:
+        raise HTTPException(404, "素材包不存在")
+    return pack.model_dump()
+
 @app.post("/api/asset-packs/upload")
 async def api_upload_pack(
     file: list[UploadFile] = File(...),
@@ -1027,14 +1035,6 @@ async def api_parse_pack(pack_id: str):
     threading.Thread(target=parse_pack, args=(pack_id,), daemon=True).start()
     return {"pack_id": pack_id, "status": "parsing"}
 
-
-@app.get("/api/asset-packs/{pack_id}")
-async def api_get_pack(pack_id: str):
-    from core.services.asset_service import get_pack
-    pack = get_pack(pack_id)
-    if not pack:
-        raise HTTPException(404, "素材包不存在")
-    return pack.model_dump()
 
 
 @app.get("/api/asset-packs/{pack_id}/items")
