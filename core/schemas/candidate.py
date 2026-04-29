@@ -2,11 +2,15 @@
 Candidate schemas — multi-candidate generation tracking.
 """
 from __future__ import annotations
-from pydantic import BaseModel, Field
+from typing import Any
+
+from pydantic import BaseModel, Field, PrivateAttr
 
 
 class CandidateRecord(BaseModel):
     """Metadata for one generated candidate image."""
+    _image: Any = PrivateAttr(default=None)
+
     candidate_id: str
     image_type: str
     generation_strategy: str  # reference_guided_whole_image / text_only / edit_based / crop_enhance

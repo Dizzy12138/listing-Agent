@@ -9,10 +9,11 @@ Key rules:
 """
 from __future__ import annotations
 
+import hashlib
 import io
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
 from rich.console import Console
 
 from core.schemas.candidate import CandidateRecord
@@ -93,7 +94,8 @@ class ImageGenerationAgent:
         is_material = brief.image_type == "material_detail"
 
         for i in range(self.candidates_per_brief):
-            cid = f"{brief.image_type}_{brief.material_focus or 'main'}_{i+1:02d}"
+            brief_key = self._candidate_brief_key(brief, prompt)
+            cid = f"{brief.image_type}_{brief_key}_{i+1:02d}"
 
             if is_scene:
                 record = self._generate_scene_candidate(cid, brief, prompt, original_image, white_bg_image)
@@ -109,7 +111,7 @@ class ImageGenerationAgent:
 
             candidates.append(record)
 
-        success = sum(1 for c in candidates if c.status in ("generated", "text_only_candidate"))
+        success = sum(1 for c in candidates if c.status in ("generated", "text_only_candidate", "fallback"))
         console.print(f"    → {success}/{self.candidates_per_brief} candidates generated")
         return candidates
 
@@ -157,11 +159,23 @@ class ImageGenerationAgent:
         except Exception as exc:
             console.print(f"    ⚠️ text generation failed: {exc}", style="yellow")
 
-        return CandidateRecord(
-            candidate_id=cid, image_type=brief.image_type,
-            generation_strategy="failed", status="failed",
-            prompt=prompt, issues=["all generation strategies failed"],
+        fallback = self._local_scene_fallback(original, brief, prompt)
+        record = CandidateRecord(
+            candidate_id=cid,
+            image_type=brief.image_type,
+            generation_strategy="local_reference_fallback",
+            reference_assets_used=["original"] if original else [],
+            sku_consistency_level=brief.sku_consistency_level,
+            prompt=prompt,
+            status="fallback",
+            issues=[
+                "model_unavailable_local_fallback",
+                "manual_review_required",
+                "not_commercial_scene_pass",
+            ],
         )
+        record._image = fallback
+        return record
 
     def _generate_material_candidate(
         self, cid: str, brief: CreativeBrief, prompt: str, original: Image.Image | None,
@@ -208,11 +222,23 @@ class ImageGenerationAgent:
         except Exception as exc:
             pass
 
-        return CandidateRecord(
-            candidate_id=cid, image_type=brief.image_type,
-            generation_strategy="failed", status="failed",
-            prompt=prompt, issues=["material generation failed"],
+        fallback = self._local_material_fallback(original, brief)
+        record = CandidateRecord(
+            candidate_id=cid,
+            image_type=brief.image_type,
+            generation_strategy="local_material_reference_fallback",
+            reference_assets_used=["original"] if original else [],
+            sku_consistency_level=brief.sku_consistency_level,
+            prompt=prompt,
+            status="fallback",
+            issues=[
+                "model_unavailable_local_fallback",
+                "manual_review_required",
+                "material_enhancement_not_performed",
+            ],
         )
+        record._image = fallback
+        return record
 
     def _generate_generic_candidate(self, cid: str, brief: CreativeBrief, prompt: str) -> CandidateRecord:
         try:
@@ -227,10 +253,17 @@ class ImageGenerationAgent:
                 return record
         except Exception:
             pass
-        return CandidateRecord(
-            candidate_id=cid, image_type=brief.image_type,
-            generation_strategy="failed", status="failed", prompt=prompt,
+        fallback = self._local_generic_fallback(brief, prompt)
+        record = CandidateRecord(
+            candidate_id=cid,
+            image_type=brief.image_type,
+            generation_strategy="local_reference_fallback",
+            prompt=prompt,
+            status="fallback",
+            issues=["model_unavailable_local_fallback", "manual_review_required"],
         )
+        record._image = fallback
+        return record
 
     # ---- Model calls ----
 
@@ -272,6 +305,104 @@ class ImageGenerationAgent:
         if crop.size[0] >= 200 and crop.size[1] >= 200:
             return crop.resize((1024, 1024), Image.LANCZOS)
         return None
+
+    # ---- Local fallback renderers ----
+
+    def _local_scene_fallback(
+        self,
+        original: Image.Image | None,
+        brief: CreativeBrief,
+        prompt: str,
+    ) -> Image.Image:
+        """Create a reviewable scene placeholder when model generation is unavailable."""
+        canvas = Image.new("RGB", (1536, 1024), "#f6f1ea")
+        draw = ImageDraw.Draw(canvas)
+        font_title = self._font(46)
+        font_body = self._font(28)
+        font_small = self._font(22)
+
+        # Simple room-like background so reviewers can distinguish this from a blank failure.
+        draw.rectangle((0, 0, 1536, 620), fill="#eee3d5")
+        draw.rectangle((0, 620, 1536, 1024), fill="#d8c7b4")
+        draw.rectangle((1040, 120, 1440, 560), fill="#dfeaf0", outline="#aebdc7", width=8)
+        draw.line((1040, 340, 1440, 340), fill="#aebdc7", width=4)
+        draw.line((1240, 120, 1240, 560), fill="#aebdc7", width=4)
+
+        if original:
+            product = original.copy().convert("RGB")
+            product.thumbnail((650, 840), Image.LANCZOS)
+            x = 450 - product.width // 2
+            y = 860 - product.height
+            shadow = Image.new("RGBA", (product.width + 120, 60), (0, 0, 0, 0))
+            sdraw = ImageDraw.Draw(shadow)
+            sdraw.ellipse((20, 10, product.width + 100, 54), fill=(0, 0, 0, 70))
+            shadow = shadow.filter(ImageFilter.GaussianBlur(18))
+            canvas.paste(shadow.convert("RGB"), (x - 60, 842))
+            canvas.paste(product, (x, y))
+
+        draw.rounded_rectangle((900, 670, 1470, 900), radius=22, fill="#ffffff", outline="#d7dde7", width=3)
+        draw.text((940, 708), "Review fallback", fill="#172033", font=font_title)
+        lines = [
+            brief.visual_goal[:48] or brief.image_type,
+            "Model generation/editing was unavailable.",
+            "Use as a reference candidate only.",
+        ]
+        for idx, line in enumerate(lines):
+            draw.text((944, 778 + idx * 38), line, fill="#536173", font=font_body if idx == 0 else font_small)
+        draw.text((88, 70), "REFERENCE-GUIDED SCENE TARGET", fill="#172033", font=font_title)
+        draw.text((90, 134), prompt[:92], fill="#536173", font=font_small)
+        return canvas
+
+    def _local_material_fallback(self, original: Image.Image | None, brief: CreativeBrief) -> Image.Image:
+        if original:
+            crop = self._extract_material_crop(original, brief.material_focus or "")
+            if crop:
+                image = crop.filter(ImageFilter.SHARPEN).convert("RGB")
+            else:
+                image = original.copy().convert("RGB")
+                image.thumbnail((1024, 1024), Image.LANCZOS)
+                bg = Image.new("RGB", (1024, 1024), "#f7f8fb")
+                bg.paste(image, ((1024 - image.width) // 2, (1024 - image.height) // 2))
+                image = bg
+        else:
+            image = Image.new("RGB", (1024, 1024), "#f7f8fb")
+
+        draw = ImageDraw.Draw(image)
+        draw.rectangle((0, 0, 1024, 96), fill="#ffffff")
+        draw.text(
+            (38, 28),
+            f"Material reference: {brief.material_focus or 'detail'}",
+            fill="#172033",
+            font=self._font(34),
+        )
+        draw.text((40, 76), "needs review: model enhancement unavailable", fill="#8a5960", font=self._font(18))
+        return image
+
+    def _local_generic_fallback(self, brief: CreativeBrief, prompt: str) -> Image.Image:
+        image = Image.new("RGB", (1536, 1024), "#f7f8fb")
+        draw = ImageDraw.Draw(image)
+        draw.rounded_rectangle((120, 160, 1416, 864), radius=28, fill="#ffffff", outline="#d7dde7", width=4)
+        draw.text((180, 230), brief.image_type, fill="#172033", font=self._font(54))
+        draw.text((182, 310), "Local fallback candidate - manual review required", fill="#8a5960", font=self._font(30))
+        draw.text((182, 380), prompt[:160], fill="#536173", font=self._font(26))
+        return image
+
+    def _font(self, size: int) -> ImageFont.ImageFont:
+        for path in (
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/Library/Fonts/Arial.ttf",
+        ):
+            try:
+                return ImageFont.truetype(path, size)
+            except OSError:
+                continue
+        return ImageFont.load_default()
+
+    def _candidate_brief_key(self, brief: CreativeBrief, prompt: str) -> str:
+        base = brief.material_focus or "main"
+        digest = hashlib.sha1(prompt.encode("utf-8")).hexdigest()[:6]
+        return f"{base}_{digest}"
 
     def save_candidates(
         self, candidates: list[CandidateRecord], output_dir: Path, image_type: str,

@@ -163,11 +163,17 @@ class VisualQAAgent:
 
             scored.sort(key=lambda x: x[0], reverse=True)
 
-            # Recommend best if it's "recommended" or "candidate"
+            # Recommend best if it's "recommended" or "candidate". In no-VLM
+            # environments, still surface the least-risky candidate for manual
+            # review so the exploration loop is not a dead end.
             for composite, s in scored:
                 if s.decision in ("recommended", "candidate"):
                     recommendations[image_type] = s.candidate_id
                     break
+            if image_type not in recommendations:
+                reviewable = [s for _, s in scored if s.decision == "needs_review"]
+                if reviewable:
+                    recommendations[image_type] = reviewable[0].candidate_id
 
         # Overall readiness
         qa_source = "vlm" if has_vlm else "manual_required"

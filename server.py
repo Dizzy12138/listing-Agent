@@ -11,7 +11,7 @@ from datetime import datetime
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from config import OUTPUT_DIR, PRODUCTS_DIR
 from agents.visual_runtime import VisualAgentRuntime
@@ -38,12 +38,12 @@ class ProductConfig(BaseModel):
     description: str = ""
     positioning: str = ""
     target_audience: str = ""
-    selling_points: list[str] = []
-    keywords: list[str] = []
+    selling_points: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
     scene_requirements: str = ""
-    image_plan: list[dict] = []
-    competitors: list[str] = []
-    internal_refs: list[str] = []
+    image_plan: list[dict] = Field(default_factory=list)
+    competitors: list[str] = Field(default_factory=list)
+    internal_refs: list[str] = Field(default_factory=list)
 
 
 class TaskStatus(BaseModel):
@@ -53,19 +53,19 @@ class TaskStatus(BaseModel):
     current_step: str = ""
     progress: int = 0
     created_at: str = ""
-    images: list[dict] = []
+    images: list[dict] = Field(default_factory=list)
     error: str = ""
 
 
 class AgentRunCreate(BaseModel):
     sku_id: str
     objective: str = "生成电商商品图"
-    image_types: list[str] = []
-    languages: list[str] = []
+    image_types: list[str] = Field(default_factory=list)
+    languages: list[str] = Field(default_factory=list)
 
 
 class AgentRunAnswers(BaseModel):
-    answers: dict[str, str] = {}
+    answers: dict[str, str] = Field(default_factory=dict)
 
 
 class ReviewCreate(BaseModel):
@@ -73,7 +73,7 @@ class ReviewCreate(BaseModel):
     asset_id: str | None = None
     reviewer: str = ""
     decision: str = "needs_revision"
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list)
     comment: str = ""
 
 
@@ -81,7 +81,7 @@ class CreativeTaskCreate(BaseModel):
     sku_id: str
     objective: str = "提升 Amazon Listing CTR/CVR"
     marketplace: str = "US"
-    target_metrics: list[str] = []
+    target_metrics: list[str] = Field(default_factory=list)
 
 
 class TemplateVersionCreate(BaseModel):
@@ -97,8 +97,8 @@ class ExperimentCreate(BaseModel):
     objective: str
     marketplace: str = "US"
     control_version_id: str | None = None
-    treatment_version_ids: list[str] = []
-    external_variables: dict = {}
+    treatment_version_ids: list[str] = Field(default_factory=list)
+    external_variables: dict = Field(default_factory=dict)
 
 
 class MetricCreate(BaseModel):
@@ -108,14 +108,14 @@ class MetricCreate(BaseModel):
     experiment_id: str | None = None
     sample_size: int | None = None
     confidence: float | None = None
-    window: dict = {}
+    window: dict = Field(default_factory=dict)
 
 
 class KnowledgeRuleCreate(BaseModel):
     scope: str
     rule_type: str
     statement: str
-    evidence: list[dict] = []
+    evidence: list[dict] = Field(default_factory=list)
     confidence: float = 0
     status: str = "candidate"
 

@@ -12,6 +12,7 @@ Does NOT output img01-img09 formal files.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from datetime import datetime
@@ -29,6 +30,7 @@ from core.agents.sku_brief_agent import SKUBriefAgent
 from core.agents.visual_qa_agent import VisualQAAgent
 from core.schemas.candidate import QAScore
 from core.schemas.sku import SKU
+from core.services.creative_service import CreativeService
 from core.services.sku_service import SKUService
 from core.tracing.trace import TraceRecorder
 from pipeline.step1_extract import remove_background
@@ -119,7 +121,7 @@ class ExploreGenerationService:
             )
 
             # Save candidates
-            type_key = f"{brief.image_type}_{brief.material_focus}" if brief.material_focus else brief.image_type
+            type_key = self._type_key_for_brief(brief)
             gen_agent.save_candidates(candidates, explore_dir, type_key)
 
             all_candidates[type_key] = candidates
@@ -194,6 +196,33 @@ class ExploreGenerationService:
         with open(trace_path, "w", encoding="utf-8") as f:
             json.dump(trace.records, f, ensure_ascii=False, indent=2)
 
+        # ---- Import explore outputs into the creative feedback loop ----
+        artifacts = self._build_creative_artifacts(all_candidates, all_scores, trace_path)
+        creative_version = None
+        try:
+            creative_version = CreativeService(output_dir=self.output_dir).record_generation_result({
+                "run_id": run_id,
+                "sku_id": product_id,
+                "mode": "explore",
+                "output_dir": str(run_dir),
+                "artifacts": artifacts,
+            })
+            trace.add(
+                step="creative_loop.import_explore_result",
+                status="success",
+                input={"artifact_count": len(artifacts)},
+                output_artifact=creative_version.version_id,
+            )
+        except Exception as exc:
+            trace.add(
+                step="creative_loop.import_explore_result",
+                status="warning",
+                input={"artifact_count": len(artifacts)},
+                issues=[f"creative_loop_import_failed: {exc}"],
+            )
+        with open(trace_path, "w", encoding="utf-8") as f:
+            json.dump(trace.records, f, ensure_ascii=False, indent=2)
+
         self._progress(progress, "完成", 100)
 
         # Summary
@@ -216,9 +245,66 @@ class ExploreGenerationService:
             "creative_briefs": [b.model_dump() for b in brief_set.briefs],
             "candidates": {k: [c.model_dump() for c in v] for k, v in all_candidates.items()},
             "qa_summary": qa_summary.model_dump(),
+            "creative_version": creative_version.model_dump() if creative_version else None,
+            "artifacts": artifacts,
             "traces": trace.records,
         }
 
     def _progress(self, callback: ProgressCallback | None, message: str, value: int):
         if callback:
             callback(message, value)
+
+    def _type_key_for_brief(self, brief) -> str:
+        if not brief.material_focus:
+            return brief.image_type
+        source = "|".join([
+            brief.image_type,
+            brief.material_focus or "",
+            brief.visual_goal or "",
+            brief.scene or "",
+        ])
+        digest = hashlib.sha1(source.encode("utf-8")).hexdigest()[:6]
+        return f"{brief.image_type}_{brief.material_focus}_{digest}"
+
+    def _build_creative_artifacts(
+        self,
+        all_candidates: dict[str, list],
+        all_scores: dict[str, list[QAScore]],
+        trace_path: Path,
+    ) -> list[dict]:
+        artifacts: list[dict] = [{
+            "artifact_id": f"{trace_path.parent.name}_trace",
+            "type": "trace",
+            "name": "trace.json",
+            "path": str(trace_path),
+            "metadata": {"generation_strategy": "agent_trace"},
+        }]
+        score_index = {
+            score.candidate_id: score
+            for scores in all_scores.values()
+            for score in scores
+        }
+        for type_key, candidates in all_candidates.items():
+            for cand in candidates:
+                path = Path(cand.image_path) if cand.image_path else None
+                if not path or not path.exists():
+                    continue
+                score = score_index.get(cand.candidate_id)
+                quality_level = "needs_review"
+                if score and score.decision in {"recommended", "candidate"} and score.visual_qa_source == "vlm":
+                    quality_level = "commercial_scene_pass" if "scene" in cand.image_type else "info_graph_pass"
+                artifacts.append({
+                    "artifact_id": cand.candidate_id,
+                    "job_id": type_key,
+                    "type": cand.image_type,
+                    "name": path.name,
+                    "path": str(path),
+                    "metadata": {
+                        **cand.model_dump(),
+                        "generation_strategy": cand.generation_strategy,
+                        "commercial_quality_level": quality_level,
+                        "reference_assets_used": cand.reference_assets_used,
+                        "visual_qa": score.model_dump() if score else None,
+                    },
+                })
+        return artifacts
