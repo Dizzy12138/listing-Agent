@@ -179,7 +179,25 @@ async def upload_product_image(product_id: str, file: UploadFile = File(...)):
         content = await file.read()
         f.write(content)
 
-    return {"status": "ok", "path": str(save_path), "filename": file.filename}
+    return {
+        "status": "ok",
+        "path": str(save_path),
+        "filename": file.filename,
+        "image_url": f"/products/images/{save_path.name}",
+    }
+
+
+@app.get("/api/products/{product_id}/assets")
+async def get_product_assets(product_id: str):
+    """获取单个 SKU 的原始图、生成图和素材引用。"""
+    product = _load_product_config(product_id)
+    sku_assets = _collect_sku_assets(product_id)
+    return {
+        "sku_id": product_id,
+        "name": product.get("name", product_id),
+        "assets": sku_assets,
+        "asset_count": len(sku_assets),
+    }
 
 
 @app.get("/api/agent-blueprint")
@@ -626,30 +644,7 @@ async def list_assets():
     assets = []
     for p in products:
         sku = p.get("product_id", "")
-        sku_assets = []
-        raw_image = _find_product_image(sku)
-        if raw_image:
-            sku_assets.append({"type": "原始图", "name": f"{sku} 原始商品图", "url": raw_image})
-
-        if OUTPUT_DIR.exists():
-            for out_dir in sorted(OUTPUT_DIR.glob(f"{sku}_*"), reverse=True):
-                for img in sorted(out_dir.glob("*.png")):
-                    asset_type = "最终成品图"
-                    if "transparent" in img.name:
-                        asset_type = "透明底图"
-                    elif "white" in img.name:
-                        asset_type = "白底图"
-                    elif "detail" in img.name:
-                        asset_type = "细节图"
-                    elif "scene" in img.name:
-                        asset_type = "场景图"
-                    sku_assets.append({
-                        "type": asset_type,
-                        "name": img.name,
-                        "url": f"/output/{out_dir.name}/{img.name}",
-                    })
-                if sku_assets:
-                    break
+        sku_assets = _collect_sku_assets(sku)
 
         assets.append({
             "sku_id": sku,
@@ -658,6 +653,40 @@ async def list_assets():
             "assets": sku_assets[:12],
         })
     return {"assets": assets}
+
+
+def _collect_sku_assets(sku: str) -> list[dict]:
+    sku_assets = []
+    raw_image = _find_product_image(sku)
+    if raw_image:
+        sku_assets.append({
+            "type": "原始图",
+            "name": f"{sku} 原始商品图",
+            "url": raw_image,
+            "source": "product_image",
+        })
+
+    if OUTPUT_DIR.exists():
+        for out_dir in sorted(OUTPUT_DIR.glob(f"{sku}_*"), reverse=True):
+            for img in sorted(out_dir.glob("*.png")):
+                asset_type = "最终成品图"
+                if "transparent" in img.name:
+                    asset_type = "透明底图"
+                elif "white" in img.name:
+                    asset_type = "白底图"
+                elif "detail" in img.name:
+                    asset_type = "细节图"
+                elif "scene" in img.name:
+                    asset_type = "场景图"
+                sku_assets.append({
+                    "type": asset_type,
+                    "name": img.name,
+                    "url": f"/output/{out_dir.name}/{img.name}",
+                    "source": "generation_output",
+                })
+            if len(sku_assets) > (1 if raw_image else 0):
+                break
+    return sku_assets[:24]
 
 
 @app.get("/api/workflows")
@@ -915,6 +944,7 @@ async def get_explore_results(task_id: str):
         "status": task.get("status"),
         "qa_summary": task.get("qa_summary", {}),
         "creative_briefs": task.get("creative_briefs", []),
+        "candidate_reviews": task.get("candidate_reviews", {}),
         "candidates": {},
     }
 
@@ -944,6 +974,9 @@ async def get_explore_results(task_id: str):
                 if meta_path.exists():
                     with open(meta_path, "r", encoding="utf-8") as f:
                         cand["metadata"] = json.load(f)
+                review = task.get("candidate_reviews", {}).get(img_file.stem)
+                if review:
+                    cand["review"] = review
                 candidates.append(cand)
 
             # Load recommendation
@@ -959,6 +992,33 @@ async def get_explore_results(task_id: str):
             }
 
     return result
+
+
+@app.post("/api/tasks/{task_id}/candidates/{candidate_id}/review")
+async def review_candidate(task_id: str, candidate_id: str, body: dict):
+    """保存候选图人工选择、标记和评论。"""
+    if task_id not in tasks:
+        raise HTTPException(404, "任务不存在")
+    task = tasks[task_id]
+    review = {
+        "candidate_id": candidate_id,
+        "decision": body.get("decision", "needs_review"),
+        "comment": body.get("comment", ""),
+        "tags": body.get("tags", []),
+        "reviewer": body.get("reviewer", ""),
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    task.setdefault("candidate_reviews", {})[candidate_id] = review
+
+    explore_dir = task.get("explore_dir", "")
+    if explore_dir:
+        review_dir = Path(explore_dir) / "_reviews"
+        review_dir.mkdir(parents=True, exist_ok=True)
+        (review_dir / f"{candidate_id}.json").write_text(
+            json.dumps(review, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    return {"status": "ok", "review": review}
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

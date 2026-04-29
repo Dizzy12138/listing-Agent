@@ -4,6 +4,27 @@ let currentSku = null;
 let products = [];
 let tasksList = [];
 let kbTab = 'category';
+let currentTaskId = null;
+let selectedCandidate = null;
+const uploadOps = {};
+
+function escapeHtml(v) {
+    return String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+
+function scoreFromQa(qa) {
+    if (!qa) return null;
+    return {
+        c: qa.commercial_score ?? qa.commercial ?? 0,
+        k: qa.sku_consistency_score ?? qa.consistency ?? 0,
+        d: qa.defect_score ?? qa.defect ?? 0,
+    };
+}
+
+function statusLabel(status) {
+    const map = { pending: '待解析', parsing: '解析中', parsed: '已解析', error: '失败' };
+    return map[status] || status || '-';
+}
 
 /* ===== Navigation ===== */
 function showPage(page) {
@@ -40,6 +61,13 @@ function openNewTaskModal() {
     sel.innerHTML = '<option value="">-- 选择 --</option>' + products.map(p =>
         `<option value="${p.product_id}">${p.product_id} - ${p.name || ''}</option>`).join('');
     openModal('taskModal');
+}
+function openSkuAssetModal() {
+    if (!currentSku) { toast('请先选择 SKU', 'error'); return; }
+    document.getElementById('skuAssetTitle').textContent = `${currentSku.product_id} 素材管理`;
+    document.getElementById('skuAssetProductId').value = currentSku.product_id;
+    renderSkuAssetList();
+    openModal('skuAssetModal');
 }
 
 /* ===== Products ===== */
@@ -107,6 +135,7 @@ async function renderImagePlan() {
     const area = document.getElementById('imagePlanArea');
     // Try to load real explore data for this SKU
     currentExploreData = null;
+    currentTaskId = null;
     if (currentSku) {
         try {
             const r = await fetch('/api/tasks');
@@ -114,6 +143,7 @@ async function renderImagePlan() {
             const tasks = (d.tasks || []).filter(t => t.product_id === currentSku.product_id && t.mode === 'explore');
             if (tasks.length) {
                 const latest = tasks[tasks.length - 1];
+                currentTaskId = latest.task_id;
                 const er = await fetch(`/api/tasks/${latest.task_id}/explore`);
                 currentExploreData = await er.json();
             }
@@ -124,9 +154,10 @@ async function renderImagePlan() {
         area.innerHTML = `<div class="plan-section-title">📋 图片计划 <span class="count">${types.length} 组</span></div>
         <div class="plan-grid">${types.map(t => {
             const g = currentExploreData.candidates[t];
-            const rec = g.recommendation;
+            const recId = g.recommendation?.recommended;
+            const rec = (g.candidates || []).find(c => (c.metadata?.candidate_id || c.filename?.replace(/\.png$/, '')) === recId) || (g.candidates || [])[0];
             const imgSrc = rec ? rec.image_url : (g.candidates[0]?.image_url || null);
-            const scores = rec?.qa_scores ? {c:rec.qa_scores.commercial||0, k:rec.qa_scores.consistency||0, d:rec.qa_scores.defect||0} : null;
+            const scores = scoreFromQa(rec?.qa);
             return imgCard(t, '', '2000×2000', imgSrc, scores, rec ? 'recommended' : null);
         }).join('')}</div>`;
         renderExploreCandidates();
@@ -153,8 +184,8 @@ function imgCard(label, type, size, imgSrc, scores, badge) {
         <div class="img-card-body">${bodyHtml}</div>
         <div class="img-card-foot">${scoresHtml}
             <div class="img-card-actions">
-                <button class="btn btn-xs btn-secondary">查看候选</button>
-                <button class="btn btn-xs btn-secondary">重新生成</button>
+                <button class="btn btn-xs btn-secondary" onclick="renderExploreCandidates()">查看候选</button>
+                <button class="btn btn-xs btn-secondary" onclick="launchExplore()">重新生成</button>
             </div>
         </div>
     </div>`;
@@ -176,11 +207,101 @@ function renderExploreCandidates() {
             const cands = g.candidates || [];
             return `<div style="margin-bottom:8px;font-size:13px;font-weight:600;">${t}</div>
             <div class="candidate-row">${cands.map(c => {
-                const scores = c.qa_scores ? {c:c.qa_scores.commercial||0, k:c.qa_scores.consistency||0, d:c.qa_scores.defect||0} : null;
-                const badge = g.recommendation?.image_url === c.image_url ? 'recommended' : 'candidate';
-                return imgCard(c.name||t, '', '2000×2000', c.image_url, scores, badge);
+                const candidateId = c.metadata?.candidate_id || (c.filename || '').replace(/\.png$/, '');
+                const scores = scoreFromQa(c.qa);
+                const review = c.review || currentExploreData.candidate_reviews?.[candidateId] || {};
+                const badge = g.recommendation?.recommended === candidateId ? 'recommended' : (review.decision === 'approved' ? 'recommended' : 'candidate');
+                const selected = selectedCandidate?.candidate_id === candidateId ? ' selected' : '';
+                return candidateCard(t, c, scores, badge, selected, review);
             }).join('')}</div>`;
-        }).join('');
+        }).join('') + `<div id="candidateInspectorArea">${selectedCandidate ? candidateInspector(selectedCandidate) : ''}</div>`;
+}
+
+function candidateCard(typeKey, c, scores, badge, selected, review) {
+    const candidateId = c.metadata?.candidate_id || (c.filename || '').replace(/\.png$/, '');
+    const title = c.metadata?.generation_strategy || c.filename || typeKey;
+    const bodyHtml = c.image_url ? `<img src="${c.image_url}" alt="${escapeHtml(candidateId)}">` : `<div class="img-card-placeholder"><span class="icon">🖼</span>暂无图片</div>`;
+    const badgeHtml = `<div class="img-card-badge ${badge}">${badge === 'recommended' ? '推荐' : '候选'}</div>`;
+    const reviewTag = review.decision ? `<span class="tag ${review.decision === 'approved' ? 'tag-green' : review.decision === 'rejected' ? 'tag-red' : 'tag-yellow'}">${review.decision}</span>` : '';
+    const scoresHtml = scores ? `<div class="img-card-scores">
+        <div class="score"><span class="score-label">商业</span><span class="score-val ${scoreClass(scores.c)}">${scores.c}</span></div>
+        <div class="score"><span class="score-label">一致性</span><span class="score-val ${scoreClass(scores.k)}">${scores.k}</span></div>
+        <div class="score"><span class="score-label">缺陷</span><span class="score-val ${scoreClass(scores.d)}">${scores.d}</span></div>
+    </div>` : '';
+    const payload = encodeURIComponent(JSON.stringify({ ...c, type_key: typeKey, candidate_id: candidateId }));
+    return `<div class="img-card candidate-card${selected}" data-candidate-id="${escapeHtml(candidateId)}">
+        <div class="img-card-head"><span class="img-card-title">${escapeHtml(candidateId)}</span><span class="img-card-size">${reviewTag}</span></div>
+        <div class="img-card-body" onclick="openCandidateLightbox('${payload}')">${bodyHtml}${badgeHtml}</div>
+        <div class="img-card-foot">${scoresHtml}
+            <div class="candidate-meta">${escapeHtml(title)}</div>
+            <div class="img-card-actions">
+                <button class="btn btn-xs btn-primary" onclick="selectCandidate('${payload}')">选中</button>
+                <button class="btn btn-xs btn-secondary" onclick="openCandidateLightbox('${payload}')">放大</button>
+                <button class="btn btn-xs btn-secondary" onclick="selectCandidate('${payload}', true)">标记/评论</button>
+            </div>
+        </div>
+    </div>`;
+}
+
+function decodePayload(payload) { return JSON.parse(decodeURIComponent(payload)); }
+
+function selectCandidate(payload, focusComment = false) {
+    selectedCandidate = decodePayload(payload);
+    renderExploreCandidates();
+    if (focusComment) setTimeout(() => document.getElementById('candidateComment')?.focus(), 0);
+}
+
+function candidateInspector(c) {
+    const candidateId = c.candidate_id;
+    const review = c.review || currentExploreData?.candidate_reviews?.[candidateId] || {};
+    const issues = c.qa?.issues || c.metadata?.issues || [];
+    return `<div class="candidate-inspector">
+        <div class="candidate-inspector-img">${c.image_url ? `<img src="${c.image_url}">` : ''}</div>
+        <div class="candidate-inspector-body">
+            <div class="candidate-inspector-title">${escapeHtml(candidateId)}</div>
+            <div class="candidate-inspector-meta">${escapeHtml(c.type_key || '')} · ${escapeHtml(c.metadata?.generation_strategy || '')}</div>
+            <div class="candidate-issues">${issues.map(i => `<span class="ctx-tag">${escapeHtml(i)}</span>`).join('') || '<span class="ctx-tag">暂无问题记录</span>'}</div>
+            <textarea class="form-textarea" id="candidateComment" rows="3" placeholder="写审核意见、修改要求或投放备注...">${escapeHtml(review.comment || '')}</textarea>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                <button class="btn btn-sm btn-primary" onclick="saveCandidateReview('approved')">设为选中</button>
+                <button class="btn btn-sm btn-secondary" onclick="saveCandidateReview('needs_revision')">需修改</button>
+                <button class="btn btn-sm btn-secondary" onclick="saveCandidateReview('rejected')">驳回</button>
+                <button class="btn btn-sm btn-secondary" onclick="openCandidateLightbox('${encodeURIComponent(JSON.stringify(c))}')">放大查看</button>
+            </div>
+        </div>
+    </div>`;
+}
+
+async function saveCandidateReview(decision) {
+    if (!selectedCandidate || !currentTaskId) { toast('没有可保存的候选图', 'error'); return; }
+    const comment = document.getElementById('candidateComment')?.value || '';
+    const r = await fetch(`/api/tasks/${currentTaskId}/candidates/${selectedCandidate.candidate_id}/review`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ decision, comment, tags: [selectedCandidate.type_key || 'candidate'] }),
+    });
+    if (!r.ok) { toast('保存失败', 'error'); return; }
+    const d = await r.json();
+    currentExploreData.candidate_reviews = currentExploreData.candidate_reviews || {};
+    currentExploreData.candidate_reviews[selectedCandidate.candidate_id] = d.review;
+    selectedCandidate.review = d.review;
+    toast('候选图反馈已保存', 'success');
+    renderExploreCandidates();
+}
+
+function openCandidateLightbox(payload) {
+    const c = decodePayload(payload);
+    const modal = document.getElementById('candidateLightboxModal');
+    document.getElementById('candidateLightboxTitle').textContent = c.candidate_id || c.filename || '候选图';
+    document.getElementById('candidateLightboxBody').innerHTML = `
+        <div class="lightbox-img-wrap">${c.image_url ? `<img src="${c.image_url}" alt="">` : ''}</div>
+        <div class="lightbox-meta">
+            <div><strong>类型：</strong>${escapeHtml(c.type_key || '')}</div>
+            <div><strong>策略：</strong>${escapeHtml(c.metadata?.generation_strategy || '')}</div>
+            <div><strong>QA：</strong>${escapeHtml(c.qa?.decision || 'needs_review')}</div>
+            ${(c.qa?.issues || c.metadata?.issues || []).map(i => `<span class="ctx-tag">${escapeHtml(i)}</span>`).join('')}
+        </div>`;
+    modal.classList.add('show');
 }
 
 /* ===== Right Panel ===== */
@@ -191,6 +312,10 @@ function toggleRightPanel() {
 
 async function renderRightPanel() {
     const body = document.getElementById('wbRightBody');
+    let skuAssets = [];
+    if (currentSku) {
+        try { const r = await fetch(`/api/products/${currentSku.product_id}/assets`); skuAssets = (await r.json()).assets || []; } catch {}
+    }
     // Load knowledge docs and find matching ones
     let docs = [];
     try { const r = await fetch('/api/knowledge-docs'); docs = (await r.json()).docs || []; } catch {}
@@ -230,7 +355,15 @@ async function renderRightPanel() {
             <div style="padding:16px;text-align:center;color:var(--text-muted);font-size:12px;">暂无素材包<br><a href="#" onclick="showPage('assets');return false;">去上传素材</a></div></div>`;
     }
 
-    body.innerHTML = knowledgeHtml + assetsHtml + `
+    const skuAssetsHtml = `<div class="ctx-section"><div class="ctx-section-title">🧩 当前 SKU 素材</div>
+        ${skuAssets.length ? skuAssets.slice(0, 6).map(a => `<div class="sku-asset-mini">
+            ${a.url ? `<img src="${a.url}">` : '<div class="sku-asset-mini-empty">素材</div>'}
+            <div><strong>${escapeHtml(a.type)}</strong><br><span>${escapeHtml(a.name)}</span></div>
+        </div>`).join('') : '<div style="padding:12px;color:var(--text-muted);font-size:12px;">暂无 SKU 素材</div>'}
+        <button class="btn btn-secondary btn-sm" style="width:100%;margin-top:8px" onclick="openSkuAssetModal()">上传/管理 SKU 素材</button>
+    </div>`;
+
+    body.innerHTML = skuAssetsHtml + knowledgeHtml + assetsHtml + `
     <div class="ctx-section">
         <div class="ctx-section-title">⚙️ Agent 设置</div>
         <div class="agent-mini-form">
@@ -246,7 +379,28 @@ async function handleProductSubmit(e) {
     e.preventDefault();
     const fd = new FormData(e.target);
     try {
-        await fetch('/api/products', { method: 'POST', body: fd });
+        const productId = (fd.get('product_id') || '').toString().trim();
+        const data = {
+            product_id: productId,
+            name: (fd.get('name') || '').toString(),
+            description: (fd.get('description') || '').toString(),
+            target_audience: (fd.get('target_audience') || '').toString(),
+            positioning: (fd.get('positioning') || '').toString(),
+            selling_points: (fd.get('selling_points') || '').toString().split('\n').map(x => x.trim()).filter(Boolean),
+            keywords: [],
+            image_plan: [],
+        };
+        await fetch('/api/products', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        });
+        const image = fd.get('product_image');
+        if (image && image.size) {
+            const imgFd = new FormData();
+            imgFd.append('file', image);
+            await fetch(`/api/products/${productId}/image`, { method: 'POST', body: imgFd });
+        }
         closeModal('productModal');
         toast('SKU 创建成功', 'success');
         e.target.reset();
@@ -263,6 +417,52 @@ function handleImagePreview(e, zoneId) {
         zone.innerHTML = `<img src="${ev.target.result}" style="max-height:120px;border-radius:8px;"><input type="file" name="product_image" accept="image/*" onchange="handleImagePreview(event,'${zoneId}')">`;
     };
     reader.readAsDataURL(file);
+}
+
+async function renderSkuAssetList() {
+    const area = document.getElementById('skuAssetList');
+    if (!area || !currentSku) return;
+    try {
+        const r = await fetch(`/api/products/${currentSku.product_id}/assets`);
+        const d = await r.json();
+        const assets = d.assets || [];
+        area.innerHTML = assets.length ? `<div class="sku-asset-grid">${assets.map(a => `
+            <div class="sku-asset-card">
+                <div class="sku-asset-preview">${a.url ? `<img src="${a.url}">` : '素材'}</div>
+                <div class="sku-asset-name">${escapeHtml(a.name)}</div>
+                <div class="sku-asset-type">${escapeHtml(a.type)}</div>
+            </div>`).join('')}</div>` : '<div style="padding:20px;text-align:center;color:var(--text-muted)">暂无素材</div>';
+    } catch {
+        area.innerHTML = '<div style="padding:20px;color:var(--danger)">素材加载失败</div>';
+    }
+}
+
+async function handleSkuAssetUpload(e) {
+    e.preventDefault();
+    if (!currentSku) return;
+    const form = e.target;
+    const file = form.querySelector('input[type=file]')?.files?.[0];
+    if (!file) { toast('请选择图片', 'info'); return; }
+    const fd = new FormData();
+    fd.append('file', file);
+    const btn = form.querySelector('button[type=submit]');
+    const orig = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = '上传中...';
+    try {
+        await uploadWithProgress(`/api/products/${currentSku.product_id}/image`, fd, () => {});
+        toast('SKU 原始图已更新', 'success');
+        form.reset();
+        await loadProducts();
+        currentSku = products.find(p => p.product_id === currentSku.product_id) || currentSku;
+        renderWorkbench();
+        renderSkuAssetList();
+    } catch (err) {
+        toast('上传失败: ' + err.message, 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = orig;
+    }
 }
 
 /* ===== Task Form ===== */
@@ -328,13 +528,14 @@ async function renderAssets() {
         <div style="font-size:15px;font-weight:600">素材包管理</div>
         <div style="display:flex;gap:8px"><button class="btn btn-primary btn-sm" onclick="openModal('uploadPackModal')">📎 上传素材包</button></div>
     </div>
+    ${uploadStatusHtml('asset')}
     <table class="data-table"><thead><tr><th>素材包名称</th><th>类型</th><th>品类</th><th>页数</th><th>素材项</th><th>状态</th><th>操作</th></tr></thead><tbody>
     ${assetPacks.map(p => `<tr>
         <td><strong>${p.name}</strong></td>
         <td><span class="tag tag-gray">${p.type}</span></td>
         <td>${(p.category||[]).map(c=>'<span class="tag tag-blue" style="margin:1px">'+c+'</span>').join('')}</td>
         <td>${p.page_count}</td><td>${p.item_count}</td>
-        <td><span class="tag ${p.parse_status==='parsed'?'tag-green':p.parse_status==='parsing'?'tag-blue':'tag-yellow'}">${p.parse_status==='parsed'?'已解析':p.parse_status==='parsing'?'解析中':'待解析'}</span></td>
+        <td><span class="tag ${p.parse_status==='parsed'?'tag-green':p.parse_status==='parsing'?'tag-blue':p.parse_status==='error'?'tag-red':'tag-yellow'}">${statusLabel(p.parse_status)}</span>${p.error?'<br><span class="inline-error">'+escapeHtml(p.error)+'</span>':''}</td>
         <td><button class="btn btn-xs btn-secondary" onclick="viewPackItems('${p.asset_pack_id}')">查看素材项</button>
         ${p.parse_status!=='parsed'?'<button class="btn btn-xs btn-primary" onclick="triggerParse(\x27'+p.asset_pack_id+'\x27)">解析</button>':''}</td>
     </tr>`).join('')}
@@ -343,8 +544,9 @@ async function renderAssets() {
 }
 async function triggerParse(packId) {
     await fetch('/api/asset-packs/'+packId+'/parse',{method:'POST'});
+    uploadOps['asset:'+packId] = { scope: 'asset', name: packId, phase: '解析中', pct: 60, status: 'running' };
     toast('开始解析素材包...','info');
-    setTimeout(renderAssets, 2000);
+    pollPackStatus(packId);
 }
 async function viewPackItems(packId) {
     const r = await fetch('/api/asset-packs/'+packId+'/items');
@@ -392,11 +594,19 @@ async function handlePackUpload(e) {
     btn.innerHTML = `<span class="upload-progress-text">上传中... 0%</span><div class="upload-progress-bar"><div class="upload-progress-fill" style="width:0%"></div></div>`;
 
     try {
+        const opId = 'asset:' + Date.now();
+        uploadOps[opId] = { scope: 'asset', name: files.length > 1 ? `${files.length} 个文件` : files[0].name, phase: '上传中', pct: 0, status: 'running' };
+        renderAssets();
         const result = await uploadWithProgress('/api/asset-packs/upload', fd, (pct) => {
             btn.querySelector('.upload-progress-text').textContent = `上传中... ${pct}%`;
             btn.querySelector('.upload-progress-fill').style.width = pct + '%';
+            uploadOps[opId].pct = pct;
+            renderAssets();
         });
         const d = JSON.parse(result);
+        uploadOps[opId].phase = '解析中';
+        uploadOps[opId].pct = 100;
+        uploadOps[opId].packId = d.pack.asset_pack_id;
         btn.innerHTML = '解析中...';
         toast('素材包上传成功，开始解析...','success');
         await fetch('/api/asset-packs/'+d.pack.asset_pack_id+'/parse',{method:'POST'});
@@ -404,7 +614,7 @@ async function handlePackUpload(e) {
         form.reset();
         btn.disabled = false;
         btn.innerHTML = origText;
-        pollPackStatus(d.pack.asset_pack_id);
+        pollPackStatus(d.pack.asset_pack_id, 40, opId);
     } catch(err) {
         toast('上传失败: '+err.message,'error');
         btn.disabled = false;
@@ -428,7 +638,21 @@ function uploadWithProgress(url, formData, onProgress) {
     });
 }
 
-function pollPackStatus(packId, maxRetries = 20) {
+function uploadStatusHtml(scope) {
+    const ops = Object.entries(uploadOps).filter(([, op]) => op.scope === scope && op.status !== 'hidden');
+    if (!ops.length) return '';
+    return `<div class="upload-status-list">${ops.map(([id, op]) => `
+        <div class="upload-status-card ${op.status || 'running'}">
+            <div class="upload-status-main">
+                <strong>${escapeHtml(op.name || '上传任务')}</strong>
+                <span>${escapeHtml(op.phase || '处理中')}</span>
+            </div>
+            <div class="progress-bar"><div class="progress-bar-fill" style="width:${Math.max(0, Math.min(100, op.pct || 0))}%"></div></div>
+            <button class="btn-ghost btn-xs" onclick="uploadOps['${id}'].status='hidden'; renderAssets(); renderKb();">隐藏</button>
+        </div>`).join('')}</div>`;
+}
+
+function pollPackStatus(packId, maxRetries = 40, opId = 'asset:' + packId) {
     let retries = 0;
     renderAssets();
     const interval = setInterval(async () => {
@@ -436,6 +660,11 @@ function pollPackStatus(packId, maxRetries = 20) {
         try {
             const r = await fetch('/api/asset-packs/' + packId);
             const p = await r.json();
+            uploadOps[opId] = uploadOps[opId] || { scope: 'asset', name: p.name || packId, status: 'running' };
+            uploadOps[opId].name = p.name || uploadOps[opId].name;
+            uploadOps[opId].phase = statusLabel(p.parse_status);
+            uploadOps[opId].pct = p.parse_status === 'parsed' ? 100 : p.parse_status === 'error' ? 100 : Math.min(95, 55 + retries * 3);
+            uploadOps[opId].status = p.parse_status === 'error' ? 'error' : p.parse_status === 'parsed' ? 'done' : 'running';
             if (p.parse_status === 'parsed' || p.parse_status === 'error' || retries >= maxRetries) {
                 clearInterval(interval);
                 renderAssets();
@@ -472,6 +701,7 @@ async function renderKbCategory(el) {
         <div style="font-size:15px;font-weight:600;">品类知识库</div>
         <button class="btn btn-primary btn-sm" onclick="openModal('uploadDocModal')">📄 上传文档</button>
     </div>
+    ${uploadStatusHtml('knowledge')}
     <table class="data-table"><thead><tr>
         <th>文档名称</th><th>适用品类</th><th>上传时间</th><th>解析状态</th><th>规则数</th><th>检查清单</th><th>关联SKU</th><th>操作</th>
     </tr></thead><tbody>
@@ -479,7 +709,7 @@ async function renderKbCategory(el) {
         <td><strong>${d.name}</strong>${d.name_en?'<br><span style="font-size:11px;color:var(--text-muted)">'+d.name_en+'</span>':''}</td>
         <td>${(d.category||[]).map(c=>'<span class="tag tag-blue">'+c+'</span>').join(' ')}</td>
         <td>${(d.upload_time||'').slice(0,10)}</td>
-        <td><span class="tag ${d.parse_status==='parsed'?'tag-green':d.parse_status==='parsing'?'tag-blue':'tag-yellow'}">${d.parse_status==='parsed'?'已解析':d.parse_status==='parsing'?'解析中':'待解析'}</span></td>
+        <td><span class="tag ${d.parse_status==='parsed'?'tag-green':d.parse_status==='parsing'?'tag-blue':d.parse_status==='error'?'tag-red':'tag-yellow'}">${statusLabel(d.parse_status)}</span>${d.error?'<br><span class="inline-error">'+escapeHtml(d.error)+'</span>':''}</td>
         <td>${d.rule_count||'-'}</td><td>${d.checklist_count||'-'}</td><td>${d.linked_sku_count||0}</td>
         <td>${d.parse_status!=='parsed'?'<button class="btn btn-xs btn-primary" onclick="analyzeDoc(\x27'+d.doc_id+'\x27)">解析</button>':'<button class="btn btn-xs btn-secondary" onclick="viewDocSummary(\x27'+d.doc_id+'\x27)">查看</button>'}</td>
     </tr>`).join('')}
@@ -556,7 +786,9 @@ async function saveSettings() {
 /* ===== Knowledge Doc Actions ===== */
 async function analyzeDoc(docId) {
     await fetch('/api/knowledge-docs/'+docId+'/analyze',{method:'POST'});
-    toast('开始解析文档...','info'); setTimeout(()=>renderKb(), 2000);
+    uploadOps['knowledge:'+docId] = { scope: 'knowledge', name: docId, phase: '解析中', pct: 60, status: 'running' };
+    toast('开始解析文档...','info');
+    pollDocStatus(docId);
 }
 async function viewDocSummary(docId) {
     const r = await fetch('/api/knowledge-docs/'+docId+'/summary');
@@ -581,11 +813,20 @@ async function handleDocUpload(e) {
     btn.innerHTML = `<span class="upload-progress-text">上传中... 0%</span><div class="upload-progress-bar"><div class="upload-progress-fill" style="width:0%"></div></div>`;
 
     try {
+        const file = form.querySelector('input[type=file]')?.files?.[0];
+        const opId = 'knowledge:' + Date.now();
+        uploadOps[opId] = { scope: 'knowledge', name: file?.name || '知识文档', phase: '上传中', pct: 0, status: 'running' };
+        renderKb();
         const result = await uploadWithProgress('/api/knowledge-docs/upload', fd, (pct) => {
             btn.querySelector('.upload-progress-text').textContent = `上传中... ${pct}%`;
             btn.querySelector('.upload-progress-fill').style.width = pct + '%';
+            uploadOps[opId].pct = pct;
+            renderKb();
         });
         const d = JSON.parse(result);
+        uploadOps[opId].phase = '解析中';
+        uploadOps[opId].pct = 100;
+        uploadOps[opId].docId = d.doc.doc_id;
         btn.innerHTML = '解析中...';
         toast('文档上传成功，开始解析...','success');
         await fetch('/api/knowledge-docs/'+d.doc.doc_id+'/analyze',{method:'POST'});
@@ -593,7 +834,7 @@ async function handleDocUpload(e) {
         form.reset();
         btn.disabled = false;
         btn.innerHTML = origText;
-        pollDocStatus(d.doc.doc_id);
+        pollDocStatus(d.doc.doc_id, 40, opId);
     } catch(err) {
         toast('上传失败: '+err.message,'error');
         btn.disabled = false;
@@ -601,7 +842,7 @@ async function handleDocUpload(e) {
     }
 }
 
-function pollDocStatus(docId, maxRetries = 20) {
+function pollDocStatus(docId, maxRetries = 40, opId = 'knowledge:' + docId) {
     let retries = 0;
     renderKb();
     const interval = setInterval(async () => {
@@ -609,6 +850,11 @@ function pollDocStatus(docId, maxRetries = 20) {
         try {
             const r = await fetch('/api/knowledge-docs/' + docId);
             const d = await r.json();
+            uploadOps[opId] = uploadOps[opId] || { scope: 'knowledge', name: d.name || docId, status: 'running' };
+            uploadOps[opId].name = d.name || uploadOps[opId].name;
+            uploadOps[opId].phase = statusLabel(d.parse_status);
+            uploadOps[opId].pct = d.parse_status === 'parsed' ? 100 : d.parse_status === 'error' ? 100 : Math.min(95, 55 + retries * 3);
+            uploadOps[opId].status = d.parse_status === 'error' ? 'error' : d.parse_status === 'parsed' ? 'done' : 'running';
             if (d.parse_status === 'parsed' || d.parse_status === 'error' || retries >= maxRetries) {
                 clearInterval(interval);
                 renderKb();

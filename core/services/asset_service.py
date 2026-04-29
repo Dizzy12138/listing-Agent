@@ -238,28 +238,38 @@ def _extract_items_from_pdf(pack: AssetPack) -> list[AssetItem]:
                     print(f"  [AssetParse] 跳过图片: {e}")
                     continue
 
-    # If no embedded images found, extract text per page as fallback
+    # If no embedded images found, extract page-level previews from text as fallback.
+    # Many design/reference PDFs do not expose images through pypdf; a page preview
+    # is still a useful asset for review and prompt/style reference.
     if not extracted:
-        print(f"  [AssetParse] 无嵌入图片，提取页面文本")
+        print(f"  [AssetParse] 无嵌入图片，生成页面预览素材")
         for page_num, page in enumerate(reader.pages):
             text = page.extract_text() or ""
-            if text.strip():
-                item_id = f"item_{pack.asset_pack_id}_{page_num:03d}"
-                item = AssetItem(
-                    asset_item_id=item_id,
-                    asset_pack_id=pack.asset_pack_id,
-                    name=f"页面_{page_num+1}",
-                    type="graphic",
-                    tags=[],
-                    bbox=[0, 0, 0, 0],
-                    page=page_num + 1,
-                    description=text[:200],
-                    applicable_image_types=pack.usage,
-                    status="available",
-                    created_at=_now(),
-                )
-                _items[item_id] = item
-                extracted.append(item)
+            item_id = f"item_{pack.asset_pack_id}_{page_num:03d}"
+            img_filename = f"{item_id}.png"
+            img_path = items_dir / img_filename
+            _render_text_preview(
+                text or f"PDF page {page_num + 1}: no extractable text or embedded image.",
+                img_path,
+                title=f"{pack.name} · p{page_num + 1}",
+            )
+            item = AssetItem(
+                asset_item_id=item_id,
+                asset_pack_id=pack.asset_pack_id,
+                name=f"页面_{page_num+1}",
+                type="graphic",
+                tags=["pdf_page", "reference"],
+                bbox=[0, 0, 1200, 1600],
+                page=page_num + 1,
+                preview_url=f"/assets/packs/{pack.asset_pack_id}/items/{img_filename}",
+                png_url=f"/assets/packs/{pack.asset_pack_id}/items/{img_filename}",
+                description=(text or "No extractable page text.")[:500],
+                applicable_image_types=pack.usage,
+                status="available",
+                created_at=_now(),
+            )
+            _items[item_id] = item
+            extracted.append(item)
 
     print(f"  [AssetParse] 提取到 {len(extracted)} 个素材项")
 
@@ -326,6 +336,66 @@ def _label_items_with_vlm(items: list[AssetItem], items_dir: Path):
         except Exception as e:
             print(f"    VLM labeling 失败 {item.asset_item_id}: {e}")
             continue
+
+
+def _render_text_preview(text: str, out_path: Path, title: str = "PDF Page"):
+    """Render extracted page text to a PNG preview when no image asset is available."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.new("RGB", (1200, 1600), "#f7f8fb")
+    draw = ImageDraw.Draw(image)
+    title_font = _font(42)
+    body_font = _font(28)
+    small_font = _font(22)
+    draw.rectangle((0, 0, 1200, 120), fill="#ffffff")
+    draw.text((56, 38), title[:42], fill="#172033", font=title_font)
+    draw.text((58, 98), "Auto-generated text preview", fill="#7a8494", font=small_font)
+
+    y = 170
+    max_chars = 2400
+    for paragraph in (text or "").replace("\r", "\n").split("\n"):
+        paragraph = paragraph.strip()
+        if not paragraph:
+            y += 16
+            continue
+        for line in _wrap_text(paragraph, 48):
+            if y > 1510 or max_chars <= 0:
+                draw.text((58, y), "...", fill="#536173", font=body_font)
+                image.save(out_path, "PNG")
+                return
+            draw.text((58, y), line, fill="#253044", font=body_font)
+            y += 42
+            max_chars -= len(line)
+        y += 18
+    image.save(out_path, "PNG")
+
+
+def _wrap_text(text: str, width: int) -> list[str]:
+    lines = []
+    current = ""
+    for char in text:
+        current += char
+        if len(current) >= width:
+            lines.append(current)
+            current = ""
+    if current:
+        lines.append(current)
+    return lines
+
+
+def _font(size: int):
+    from PIL import ImageFont
+    for path in (
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/Library/Fonts/Arial.ttf",
+    ):
+        try:
+            return ImageFont.truetype(path, size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
 
 
 
@@ -471,7 +541,10 @@ def _extract_text_from_file(doc: KnowledgeDoc) -> str:
             for para in doc_file.paragraphs:
                 text += para.text + "\n"
         except ImportError:
-            text = f"[DOCX文件: {source.name}, 需要安装 python-docx 才能提取文本]"
+            text = f"[DOCX文件: {source.name}, 当前环境缺少 python-docx，已记录为待人工补充的知识源。]"
+
+    elif ext in (".doc",):
+        text = f"[DOC文件: {source.name}, 当前环境暂不支持旧版 .doc 自动解析，请转换为 .docx/.pdf 或补充文本摘要。]"
 
     elif ext in (".txt", ".md"):
         text = source.read_text(encoding="utf-8", errors="ignore")
@@ -529,8 +602,75 @@ def _extract_knowledge_real(doc: KnowledgeDoc) -> dict:
               f"{len(knowledge.get('checklist',[]))} checklist items")
         return knowledge
     except Exception as e:
-        print(f"  [KnowledgeAnalyze] LLM 分析失败: {e}")
-        raise
+        print(f"  [KnowledgeAnalyze] LLM 分析失败，使用本地启发式解析: {e}")
+        return _heuristic_knowledge(text, doc)
+
+
+def _heuristic_knowledge(text: str, doc: KnowledgeDoc) -> dict:
+    lines = [ln.strip(" -*\t") for ln in text.splitlines() if ln.strip()]
+    lowered = text.lower()
+    rules = []
+    scene_rules = []
+    style_rules = []
+    negatives = []
+    checklist = []
+    keywords = []
+
+    for line in lines[:160]:
+        low = line.lower()
+        if any(k in low for k in ["must", "should", "需要", "必须", "保持", "要求", "avoid", "不要", "禁止"]):
+            target = negatives if any(k in low for k in ["avoid", "不要", "禁止", "no "]) else rules
+            target.append(line[:180])
+        if any(k in low for k in ["scene", "场景", "living room", "home", "室内", "客厅"]):
+            scene_rules.append(line[:180])
+        if any(k in low for k in ["style", "font", "color", "风格", "字体", "颜色", "配色"]):
+            style_rules.append(line[:180])
+        if any(k in low for k in ["check", "qa", "review", "检查", "质检", "审核"]):
+            checklist.append(line[:180])
+
+    for token in ["Amazon", "cat tree", "pet supplies", "premium", "205cm", "sisal", "plush", "猫爬架", "剑麻", "绒布"]:
+        if token.lower() in lowered:
+            keywords.append(token)
+
+    if not checklist:
+        checklist = [
+            "产品结构、颜色、比例与 SKU 参考保持一致",
+            "最终图不得出现透明棋盘格、白底残留或明显贴图感",
+            "场景图需有自然接触阴影并符合电商主图/详情页用途",
+        ]
+    if not rules:
+        rules = [
+            "SKU 事实优先于模型猜测，硬性卖点以商品配置为准",
+            "知识文档已进入人工复核模式，建议补充结构化规则或启用 LLM 解析",
+        ]
+
+    return {
+        "category_path": " > ".join(doc.category) if doc.category else "",
+        "summary": f"{doc.name} 本地解析摘要：提取 {len(lines)} 行文本，生成待复核规则。",
+        "applicable_products": doc.category,
+        "global_rules": _dedupe(rules)[:12],
+        "image_plan_templates": [],
+        "prompt_templates": [],
+        "scene_rules": _dedupe(scene_rules)[:10],
+        "style_rules": _dedupe(style_rules)[:10],
+        "negative_prompts": _dedupe(negatives)[:10],
+        "checklist": _dedupe(checklist)[:12],
+        "keyword_bank": keywords,
+        "replaceable_variables": ["${product_name}", "${sku_id}", "${core_selling_points}"],
+        "parse_mode": "local_heuristic_fallback",
+    }
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for item in items:
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -585,5 +725,4 @@ def _load_all_docs():
             if did not in _docs:
                 data = json.loads((d / "meta.json").read_text(encoding="utf-8"))
                 _docs[did] = KnowledgeDoc(**data)
-
 

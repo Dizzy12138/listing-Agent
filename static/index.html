@@ -52,7 +52,7 @@
                 <div class="meta" id="wbSkuMeta"></div>
             </div>
             <div class="wb-header-actions">
-                <button class="btn btn-secondary btn-sm" onclick="showPage('assets')">📎 上传素材</button>
+                <button class="btn btn-secondary btn-sm" onclick="openSkuAssetModal()">📎 SKU素材</button>
                 <button class="btn btn-primary btn-sm" id="btnExplore" onclick="launchExplore()">🔍 发起 Explore</button>
                 <button class="btn btn-secondary btn-sm" id="btnBatch" onclick="toast('请先完成 Explore','info')">📦 进入 Batch</button>
             </div>
@@ -213,7 +213,7 @@
             <form onsubmit="handleDocUpload(event)">
                 <div class="form-grid">
                     <div class="form-group full"><label class="form-label">文档文件 *</label>
-                        <div class="upload-zone"><div class="icon">📋</div><div class="text">支持 PDF / DOCX，拖拽或 <strong>点击上传</strong></div><input type="file" name="file" accept=".pdf,.docx,.doc" required></div>
+                        <div class="upload-zone"><div class="icon">📋</div><div class="text">支持 PDF / DOCX / TXT / MD，拖拽或 <strong>点击上传</strong></div><input type="file" name="file" accept=".pdf,.docx,.doc,.txt,.md" required></div>
                     </div>
                     <div class="form-group"><label class="form-label">文档名称</label><input class="form-input" name="name" placeholder="如 猫爬架Amazon模板"></div>
                     <div class="form-group"><label class="form-label">英文名称</label><input class="form-input" name="name_en" placeholder="Cat Tree Template"></div>
@@ -226,8 +226,37 @@
             </form>
         </div>
     </div>
+	</div>
+
+<!-- SKU Asset Modal -->
+<div class="modal-overlay" id="skuAssetModal">
+    <div class="modal modal-wide">
+        <div class="modal-header"><h2 id="skuAssetTitle">SKU 素材管理</h2><button class="modal-close" onclick="closeModal('skuAssetModal')">✕</button></div>
+        <div class="modal-body">
+            <form onsubmit="handleSkuAssetUpload(event)" style="margin-bottom:16px;">
+                <input type="hidden" id="skuAssetProductId">
+                <div class="form-grid">
+                    <div class="form-group full"><label class="form-label">上传/替换 SKU 原始商品图</label>
+                        <div class="upload-zone"><div class="icon">📷</div><div class="text">上传当前 SKU 的主体参考图</div><input type="file" name="file" accept="image/*" required></div>
+                    </div>
+                </div>
+                <div style="display:flex;justify-content:flex-end;margin-top:12px;">
+                    <button type="submit" class="btn btn-primary">上传 SKU 素材</button>
+                </div>
+            </form>
+            <div id="skuAssetList"></div>
+        </div>
+    </div>
 </div>
 
-<script src="/static/app.js"></script>
+<!-- Candidate Lightbox Modal -->
+<div class="modal-overlay" id="candidateLightboxModal">
+    <div class="modal modal-lightbox">
+        <div class="modal-header"><h2 id="candidateLightboxTitle">候选图</h2><button class="modal-close" onclick="closeModal('candidateLightboxModal')">✕</button></div>
+        <div class="modal-body" id="candidateLightboxBody"></div>
+    </div>
+</div>
+
+	<script src="/static/app.js"></script>
 </body>
 </html>
