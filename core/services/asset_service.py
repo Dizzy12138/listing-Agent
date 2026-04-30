@@ -3,9 +3,12 @@ Asset management service — PDF parsing, icon extraction, pack/item CRUD.
 Uses PyMuPDF for real PDF image extraction and LLM for document analysis.
 """
 import json
+import re
 import uuid
 import shutil
 import traceback
+import zipfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -540,8 +543,13 @@ def _extract_text_from_file(doc: KnowledgeDoc) -> str:
             doc_file = Document(str(source))
             for para in doc_file.paragraphs:
                 text += para.text + "\n"
+            for table in doc_file.tables:
+                for row in table.rows:
+                    text += " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip()) + "\n"
         except ImportError:
-            text = f"[DOCX文件: {source.name}, 当前环境缺少 python-docx，已记录为待人工补充的知识源。]"
+            text = _extract_docx_text_stdlib(source)
+        except Exception:
+            text = _extract_docx_text_stdlib(source)
 
     elif ext in (".doc",):
         text = f"[DOC文件: {source.name}, 当前环境暂不支持旧版 .doc 自动解析，请转换为 .docx/.pdf 或补充文本摘要。]"
@@ -552,6 +560,47 @@ def _extract_text_from_file(doc: KnowledgeDoc) -> str:
     return text.strip()
 
 
+def _extract_docx_text_stdlib(source: Path) -> str:
+    """Extract DOCX text with only stdlib zip/xml as a python-docx fallback."""
+    if not zipfile.is_zipfile(source):
+        return f"[DOCX文件: {source.name}, 文件不是有效的 Office Open XML 包。]"
+
+    parts = ["word/document.xml"]
+    with zipfile.ZipFile(source) as zf:
+        parts.extend(
+            name for name in zf.namelist()
+            if name.startswith("word/header") or name.startswith("word/footer")
+        )
+        chunks: list[str] = []
+        for part in parts:
+            if part not in zf.namelist():
+                continue
+            try:
+                root = ET.fromstring(zf.read(part))
+            except ET.ParseError:
+                continue
+            chunks.extend(_docx_xml_text_chunks(root))
+    return "\n".join(chunks).strip()
+
+
+def _docx_xml_text_chunks(root: ET.Element) -> list[str]:
+    ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    chunks: list[str] = []
+    for para in root.iter(f"{ns}p"):
+        parts: list[str] = []
+        for node in para.iter():
+            if node.tag == f"{ns}t" and node.text:
+                parts.append(node.text)
+            elif node.tag == f"{ns}tab":
+                parts.append("\t")
+            elif node.tag in {f"{ns}br", f"{ns}cr"}:
+                parts.append("\n")
+        line = "".join(parts).strip()
+        if line:
+            chunks.append(line)
+    return chunks
+
+
 def _extract_knowledge_real(doc: KnowledgeDoc) -> dict:
     """Extract structured knowledge using real text extraction + LLM analysis."""
     print(f"  [KnowledgeAnalyze] 开始解析文档: {doc.name}")
@@ -559,54 +608,201 @@ def _extract_knowledge_real(doc: KnowledgeDoc) -> dict:
     text = _extract_text_from_file(doc)
     if not text:
         print(f"  [KnowledgeAnalyze] 文档内容为空")
-        return {"summary": "文档内容为空或无法提取", "global_rules": [], "checklist": []}
+        return _heuristic_knowledge("", doc, reason="empty_extracted_text")
 
-    # Truncate to avoid token limits (keep first ~8000 chars)
-    if len(text) > 8000:
-        text = text[:8000] + "\n...[截断]"
-
-    print(f"  [KnowledgeAnalyze] 提取到 {len(text)} 字符文本，调用 LLM 分析")
-
-    prompt = f"""请分析以下电商产品文档，提取结构化的图片生成知识。
-
-文档内容：
----
-{text}
----
-
-请返回JSON格式，包含以下字段（每个字段为数组，如果文档中没有相关内容则返回空数组）：
-
-{{
-  "category_path": "品类路径，如 Pet Supplies > Cat Supplies > Cat Furniture > Cat Tree",
-  "summary": "文档内容一句话摘要",
-  "applicable_products": ["适用的产品类型"],
-  "global_rules": ["全局生图规则，如：保持产品结构一致"],
-  "image_plan_templates": [{{"type": "hero_scene", "name": "首图", "size": "2000x2000"}}],
-  "prompt_templates": ["可复用的提示词模板"],
-  "scene_rules": ["场景图拍摄/生成规则"],
-  "style_rules": ["风格规则，如配色、字体、图标使用"],
-  "negative_prompts": ["不要做的事情，如：不改变材质"],
-  "checklist": ["质检清单项"],
-  "keyword_bank": ["关键词"],
-  "replaceable_variables": ["可替换变量如 ${{product_name}}"]
-}}
-
-只返回JSON，不要其他文本。"""
-
+    print(f"  [KnowledgeAnalyze] 提取到 {len(text)} 字符文本，调用 LLM 分块分析")
     try:
-        from models.llm import chat
-        result = chat(prompt, response_format="json")
-        knowledge = json.loads(result)
-        print(f"  [KnowledgeAnalyze] LLM 返回结构化知识: "
-              f"{len(knowledge.get('global_rules',[]))} rules, "
-              f"{len(knowledge.get('checklist',[]))} checklist items")
-        return knowledge
+        return _extract_knowledge_with_llm(text, doc)
     except Exception as e:
         print(f"  [KnowledgeAnalyze] LLM 分析失败，使用本地启发式解析: {e}")
-        return _heuristic_knowledge(text, doc)
+        return _heuristic_knowledge(text, doc, reason=f"llm_failed: {e}")
 
 
-def _heuristic_knowledge(text: str, doc: KnowledgeDoc) -> dict:
+def _extract_knowledge_with_llm(text: str, doc: KnowledgeDoc) -> dict:
+    chunks = _chunk_text(text, max_chars=6200)
+    models = _llm_model_candidates()
+    last_error: Exception | None = None
+    print(f"  [KnowledgeAnalyze] LLM chunks={len(chunks)}, models={models}")
+
+    for model in models:
+        try:
+            partials = []
+            for idx, chunk in enumerate(chunks, start=1):
+                prompt = _knowledge_chunk_prompt(doc, chunk, idx, len(chunks))
+                partials.append(_chat_json(prompt, model=model))
+            merged = _merge_knowledge_partials(partials, doc)
+            merged["parse_mode"] = "llm_chunked"
+            merged["llm_model"] = model
+            merged["source_text_chars"] = len(text)
+            print(f"  [KnowledgeAnalyze] LLM 提取成功: model={model}, "
+                  f"rules={len(merged.get('global_rules', []))}, checklist={len(merged.get('checklist', []))}")
+            return merged
+        except Exception as exc:
+            last_error = exc
+            print(f"  [KnowledgeAnalyze] 模型 {model} 提取失败: {exc}")
+            continue
+    raise RuntimeError(str(last_error) if last_error else "no_llm_model_available")
+
+
+def _llm_model_candidates() -> list[str]:
+    try:
+        import config
+        raw = [
+            config.MODELS.get("llm_primary"),
+            config.MODELS.get("llm_secondary"),
+            config.MODELS.get("quality"),
+        ]
+    except Exception:
+        raw = []
+    result = []
+    for model in raw:
+        if model and model not in result:
+            result.append(model)
+    return result or ["gpt-5.2"]
+
+
+def _chat_json(prompt: str, model: str) -> dict:
+    from models.llm import chat
+
+    response = chat(prompt=prompt, model=model, response_format="json")
+    return _parse_json_object(response)
+
+
+def _parse_json_object(text: str) -> dict:
+    text = (text or "").strip()
+    try:
+        value = json.loads(text)
+        return value if isinstance(value, dict) else {"items": value}
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
+    if match:
+        return _parse_json_object(match.group(1))
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        value = json.loads(text[start:end + 1])
+        return value if isinstance(value, dict) else {"items": value}
+    raise ValueError("LLM did not return a JSON object")
+
+
+def _knowledge_chunk_prompt(doc: KnowledgeDoc, chunk: str, idx: int, total: int) -> str:
+    return f"""你是跨境电商商品视觉知识库抽取 Agent。
+
+任务：从文档片段中提取可直接用于 Amazon Listing 生图、提示词反推、素材规范和质检闭环的结构化知识。
+
+文档名称：{doc.name}
+适用品类：{", ".join(doc.category)}
+片段：{idx}/{total}
+
+文档片段：
+---
+{chunk}
+---
+
+请只返回 JSON object，字段如下：
+{{
+  "category_path": "品类路径",
+  "summary": "本片段摘要",
+  "applicable_products": ["适用产品"],
+  "global_rules": ["全局生图规则，保留具体约束"],
+  "image_plan_templates": [{{"type": "image type", "name": "图片名称", "goal": "视觉目标", "elements": ["必备元素"]}}],
+  "prompt_templates": ["可复用提示词或提示词结构"],
+  "scene_rules": ["场景图规则"],
+  "style_rules": ["版式/配色/字体/图标/视觉规范"],
+  "negative_prompts": ["禁止项/避免项"],
+  "checklist": ["质检清单"],
+  "keyword_bank": ["关键词"],
+  "replaceable_variables": ["可替换变量"]
+}}
+
+要求：
+- 不要泛泛总结，尽量保留文档里的具体数字、图型、卖点、场景、禁止项。
+- 如果该片段没有某类信息，对应字段返回空数组或空字符串。
+- 输出必须是合法 JSON，不要 markdown。"""
+
+
+def _chunk_text(text: str, max_chars: int = 6200) -> list[str]:
+    paragraphs = [p.strip() for p in re.split(r"\n{2,}|\r\n{2,}", text) if p.strip()]
+    if not paragraphs:
+        paragraphs = [text]
+    chunks: list[str] = []
+    current = ""
+    for paragraph in paragraphs:
+        if len(paragraph) > max_chars:
+            if current:
+                chunks.append(current.strip())
+                current = ""
+            for start in range(0, len(paragraph), max_chars):
+                chunks.append(paragraph[start:start + max_chars].strip())
+            continue
+        if len(current) + len(paragraph) + 2 > max_chars and current:
+            chunks.append(current.strip())
+            current = paragraph
+        else:
+            current = f"{current}\n\n{paragraph}" if current else paragraph
+    if current:
+        chunks.append(current.strip())
+    return chunks
+
+
+def _merge_knowledge_partials(partials: list[dict], doc: KnowledgeDoc) -> dict:
+    list_fields = [
+        "applicable_products",
+        "global_rules",
+        "image_plan_templates",
+        "prompt_templates",
+        "scene_rules",
+        "style_rules",
+        "negative_prompts",
+        "checklist",
+        "keyword_bank",
+        "replaceable_variables",
+    ]
+    merged: dict = {
+        "category_path": "",
+        "summary": "",
+        **{field: [] for field in list_fields},
+    }
+
+    summaries = []
+    for partial in partials:
+        if partial.get("category_path") and not merged["category_path"]:
+            merged["category_path"] = partial.get("category_path", "")
+        if partial.get("summary"):
+            summaries.append(str(partial["summary"]))
+        for field in list_fields:
+            merged[field].extend(_as_list(partial.get(field)))
+
+    if not merged["category_path"]:
+        merged["category_path"] = " > ".join(doc.category) if doc.category else ""
+    merged["summary"] = f"{doc.name} LLM 提取摘要：" + " / ".join(_dedupe(summaries)[:4])
+    for field in list_fields:
+        merged[field] = _dedupe_structured(merged[field])[:40]
+    return merged
+
+
+def _as_list(value) -> list:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _dedupe_structured(items: list) -> list:
+    seen = set()
+    result = []
+    for item in items:
+        key = json.dumps(item, ensure_ascii=False, sort_keys=True) if isinstance(item, dict) else str(item)
+        if key in seen or key in {"", "[]", "{}"}:
+            continue
+        seen.add(key)
+        result.append(item)
+    return result
+
+
+def _heuristic_knowledge(text: str, doc: KnowledgeDoc, reason: str = "local_fallback") -> dict:
     lines = [ln.strip(" -*\t") for ln in text.splitlines() if ln.strip()]
     lowered = text.lower()
     rules = []
@@ -658,6 +854,7 @@ def _heuristic_knowledge(text: str, doc: KnowledgeDoc) -> dict:
         "keyword_bank": keywords,
         "replaceable_variables": ["${product_name}", "${sku_id}", "${core_selling_points}"],
         "parse_mode": "local_heuristic_fallback",
+        "fallback_reason": reason,
     }
 
 
@@ -725,4 +922,3 @@ def _load_all_docs():
             if did not in _docs:
                 data = json.loads((d / "meta.json").read_text(encoding="utf-8"))
                 _docs[did] = KnowledgeDoc(**data)
-

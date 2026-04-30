@@ -749,12 +749,28 @@ async function renderKbCategory(el) {
         <td><strong>${d.name}</strong>${d.name_en?'<br><span style="font-size:11px;color:var(--text-muted)">'+d.name_en+'</span>':''}</td>
         <td>${(d.category||[]).map(c=>'<span class="tag tag-blue">'+c+'</span>').join(' ')}</td>
         <td>${(d.upload_time||'').slice(0,10)}</td>
-        <td><span class="tag ${d.parse_status==='parsed'?'tag-green':d.parse_status==='parsing'?'tag-blue':d.parse_status==='error'?'tag-red':'tag-yellow'}">${statusLabel(d.parse_status)}</span>${d.error?'<br><span class="inline-error">'+escapeHtml(d.error)+'</span>':''}</td>
+        <td><span class="tag ${d.parse_status==='parsed'?'tag-green':d.parse_status==='parsing'?'tag-blue':d.parse_status==='error'?'tag-red':'tag-yellow'}">${statusLabel(d.parse_status)}</span>
+            ${docParseModeBadge(d)}
+            ${d.error?'<br><span class="inline-error">'+escapeHtml(d.error)+'</span>':''}</td>
         <td>${d.rule_count||'-'}</td><td>${d.checklist_count||'-'}</td><td>${d.linked_sku_count||0}</td>
-        <td>${d.parse_status!=='parsed'?'<button class="btn btn-xs btn-primary" onclick="analyzeDoc(\x27'+d.doc_id+'\x27)">解析</button>':'<button class="btn btn-xs btn-secondary" onclick="viewDocSummary(\x27'+d.doc_id+'\x27)">查看</button>'}</td>
+        <td>${d.parse_status!=='parsed'
+            ? '<button class="btn btn-xs btn-primary" onclick="analyzeDoc(\x27'+d.doc_id+'\x27)">解析</button>'
+            : '<button class="btn btn-xs btn-secondary" onclick="viewDocSummary(\x27'+d.doc_id+'\x27)">查看</button><button class="btn btn-xs btn-primary" onclick="analyzeDoc(\x27'+d.doc_id+'\x27)">重新解析</button>'}</td>
     </tr>`).join('')}
     </tbody></table>
     <div id="docSummaryArea" style="margin-top:16px"></div>`;
+}
+
+function docParseModeBadge(doc) {
+    const k = doc.parsed_knowledge || {};
+    if (!k.parse_mode) return '';
+    if (k.parse_mode === 'llm_chunked') {
+        return `<br><span class="tag tag-blue" style="margin-top:4px">LLM: ${escapeHtml(k.llm_model || '')}</span>`;
+    }
+    if (k.parse_mode === 'local_heuristic_fallback') {
+        return `<br><span class="tag tag-yellow" style="margin-top:4px">本地兜底</span>`;
+    }
+    return `<br><span class="tag tag-gray" style="margin-top:4px">${escapeHtml(k.parse_mode)}</span>`;
 }
 
 function renderKbInspiration(el) {
@@ -836,6 +852,9 @@ async function viewDocSummary(docId) {
     const k = d.knowledge || {};
     const area = document.getElementById('docSummaryArea');
     area.innerHTML = `<div class="settings-card"><h3>📋 ${d.summary||docId}</h3>
+        <div class="ctx-item"><span class="label">解析模式</span>${k.parse_mode === 'llm_chunked' ? 'LLM 分块提取' : k.parse_mode === 'local_heuristic_fallback' ? '本地兜底（LLM 未成功）' : (k.parse_mode || '-')}</div>
+        ${k.llm_model ? `<div class="ctx-item"><span class="label">LLM 模型</span>${escapeHtml(k.llm_model)}</div>` : ''}
+        ${k.fallback_reason ? `<div class="ctx-item"><span class="label">兜底原因</span><span class="inline-error">${escapeHtml(k.fallback_reason)}</span></div>` : ''}
         <div class="ctx-item"><span class="label">品类路径</span>${k.category_path||'-'}</div>
         <div class="ctx-item"><span class="label">全局规则</span>${(k.global_rules||[]).map(r=>'<div>• '+r+'</div>').join('')}</div>
         <div class="ctx-item"><span class="label">场景规则</span>${(k.scene_rules||[]).map(r=>'<div>• '+r+'</div>').join('')}</div>
