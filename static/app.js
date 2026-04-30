@@ -419,6 +419,44 @@ function handleImagePreview(e, zoneId) {
     reader.readAsDataURL(file);
 }
 
+function handleFileSelect(e) {
+    const input = e.target;
+    const files = Array.from(input.files || []);
+    const zone = input.closest('.upload-zone');
+    if (!zone) return;
+    zone.classList.toggle('has-file', files.length > 0);
+    zone.querySelector('.upload-selected')?.remove();
+    if (!files.length) return;
+
+    const total = files.reduce((sum, f) => sum + (f.size || 0), 0);
+    const label = files.length === 1
+        ? files[0].name
+        : `${files.length} 个文件：${files.slice(0, 3).map(f => f.name).join('、')}${files.length > 3 ? '...' : ''}`;
+    const selected = document.createElement('div');
+    selected.className = 'upload-selected';
+    selected.innerHTML = `<strong>已选择</strong><span title="${escapeHtml(label)}">${escapeHtml(label)}</span><em>${formatBytes(total)}</em>`;
+    zone.appendChild(selected);
+}
+
+function clearUploadSelection(form) {
+    form.querySelectorAll('.upload-zone').forEach(zone => {
+        zone.classList.remove('has-file');
+        zone.querySelector('.upload-selected')?.remove();
+    });
+}
+
+function formatBytes(bytes) {
+    if (!bytes) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB'];
+    let size = bytes;
+    let idx = 0;
+    while (size >= 1024 && idx < units.length - 1) {
+        size /= 1024;
+        idx++;
+    }
+    return `${size.toFixed(size >= 10 || idx === 0 ? 0 : 1)} ${units[idx]}`;
+}
+
 async function renderSkuAssetList() {
     const area = document.getElementById('skuAssetList');
     if (!area || !currentSku) return;
@@ -453,6 +491,7 @@ async function handleSkuAssetUpload(e) {
         await uploadWithProgress(`/api/products/${currentSku.product_id}/image`, fd, () => {});
         toast('SKU 原始图已更新', 'success');
         form.reset();
+        clearUploadSelection(form);
         await loadProducts();
         currentSku = products.find(p => p.product_id === currentSku.product_id) || currentSku;
         renderWorkbench();
@@ -612,6 +651,7 @@ async function handlePackUpload(e) {
         await fetch('/api/asset-packs/'+d.pack.asset_pack_id+'/parse',{method:'POST'});
         closeModal('uploadPackModal');
         form.reset();
+        clearUploadSelection(form);
         btn.disabled = false;
         btn.innerHTML = origText;
         pollPackStatus(d.pack.asset_pack_id, 40, opId);
@@ -832,6 +872,7 @@ async function handleDocUpload(e) {
         await fetch('/api/knowledge-docs/'+d.doc.doc_id+'/analyze',{method:'POST'});
         closeModal('uploadDocModal');
         form.reset();
+        clearUploadSelection(form);
         btn.disabled = false;
         btn.innerHTML = origText;
         pollDocStatus(d.doc.doc_id, 40, opId);

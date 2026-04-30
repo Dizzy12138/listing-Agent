@@ -190,7 +190,7 @@
             <form onsubmit="handlePackUpload(event)">
                 <div class="form-grid">
                     <div class="form-group full"><label class="form-label">文件 *（支持 PDF / PNG / JPG / SVG / WebP）</label>
-                        <div class="upload-zone"><div class="icon">📎</div><div class="text">拖拽文件到此处，或 <strong>点击上传</strong></div><input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.svg,.webp,.gif,.bmp,.tiff" multiple required></div>
+                        <div class="upload-zone"><div class="icon">📎</div><div class="text">拖拽文件到此处，或 <strong>点击上传</strong></div><input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.svg,.webp,.gif,.bmp,.tiff" multiple required onchange="handleFileSelect(event)"></div>
                     </div>
                     <div class="form-group"><label class="form-label">素材包名称</label><input class="form-input" name="name" placeholder="如 Feandrea listing图标集"></div>
                     <div class="form-group"><label class="form-label">适用品类</label><input class="form-input" name="category" value="Pet Supplies,Cat Furniture"></div>
@@ -213,7 +213,7 @@
             <form onsubmit="handleDocUpload(event)">
                 <div class="form-grid">
                     <div class="form-group full"><label class="form-label">文档文件 *</label>
-                        <div class="upload-zone"><div class="icon">📋</div><div class="text">支持 PDF / DOCX / TXT / MD，拖拽或 <strong>点击上传</strong></div><input type="file" name="file" accept=".pdf,.docx,.doc,.txt,.md" required></div>
+                        <div class="upload-zone"><div class="icon">📋</div><div class="text">支持 PDF / DOCX / TXT / MD，拖拽或 <strong>点击上传</strong></div><input type="file" name="file" accept=".pdf,.docx,.doc,.txt,.md" required onchange="handleFileSelect(event)"></div>
                     </div>
                     <div class="form-group"><label class="form-label">文档名称</label><input class="form-input" name="name" placeholder="如 猫爬架Amazon模板"></div>
                     <div class="form-group"><label class="form-label">英文名称</label><input class="form-input" name="name_en" placeholder="Cat Tree Template"></div>
@@ -237,7 +237,7 @@
                 <input type="hidden" id="skuAssetProductId">
                 <div class="form-grid">
                     <div class="form-group full"><label class="form-label">上传/替换 SKU 原始商品图</label>
-                        <div class="upload-zone"><div class="icon">📷</div><div class="text">上传当前 SKU 的主体参考图</div><input type="file" name="file" accept="image/*" required></div>
+                        <div class="upload-zone"><div class="icon">📷</div><div class="text">上传当前 SKU 的主体参考图</div><input type="file" name="file" accept="image/*" required onchange="handleFileSelect(event)"></div>
                     </div>
                 </div>
                 <div style="display:flex;justify-content:flex-end;margin-top:12px;">
