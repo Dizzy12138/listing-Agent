@@ -19,6 +19,14 @@ from core.services.creative_service import CreativeService
 
 app = FastAPI(title="电商批量生图平台", version="1.0.0")
 
+
+@app.middleware("http")
+async def no_cache_static_assets(request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
+
 # 静态文件
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/output", StaticFiles(directory="output"), name="output")

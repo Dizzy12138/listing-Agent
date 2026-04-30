@@ -910,3 +910,10 @@ function pollDocStatus(docId, maxRetries = 40, opId = 'knowledge:' + docId) {
 
 /* ===== Init ===== */
 document.addEventListener('DOMContentLoaded', () => { loadProducts(); });
+
+document.addEventListener('change', (e) => {
+    const target = e.target;
+    if (target && target.matches && target.matches('.upload-zone input[type="file"]')) {
+        handleFileSelect(e);
+    }
+});

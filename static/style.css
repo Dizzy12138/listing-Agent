@@ -469,6 +469,7 @@ input, select, textarea { font-family: inherit; font-size: inherit; }
   background: var(--bg-card); border: 1px solid var(--border);
   display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px;
   align-items: center; text-align: left; font-size: 12px; position: relative; z-index: 1;
+  pointer-events: none;
 }
 .upload-selected strong { color: var(--primary); font-weight: 700; }
 .upload-selected span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
