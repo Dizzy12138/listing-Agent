@@ -287,6 +287,14 @@ async def launch_agent_generation(run_id: str):
         product_id=payload.get("product_id") or run["sku_id"],
         model=payload.get("model", "gpt-image-2"),
         scene_count=int(payload.get("scene_count", 3)),
+        mode=payload.get("mode", "explore"),
+        knowledge_doc_ids=_parse_id_list(payload.get("knowledge_doc_ids", [])),
+        asset_pack_ids=_parse_id_list(payload.get("asset_pack_ids", [])),
+        asset_item_ids=_parse_id_list(payload.get("asset_item_ids", [])),
+        inspiration_asset_ids=_parse_id_list(payload.get("inspiration_asset_ids", [])),
+        standard_asset_ids=_parse_id_list(payload.get("standard_asset_ids", [])),
+        size=payload.get("size", "2000x2000"),
+        candidate_count=int(payload.get("candidate_count", 4)),
     )
     run["status"] = "generation_launched"
     run["artifacts"]["generation_task"] = result
@@ -619,6 +627,7 @@ def _append_task_context_trace(result: dict, task: dict):
             "asset_packs_used": bool(payload["asset_pack_ids"]),
             "asset_items_used": bool(payload["asset_item_ids"] or payload["standard_asset_ids"]),
             "excluded_unconfirmed_asset_item_ids": [],
+            "batch_context_record_only": True,
         },
         "model": None,
         "output_artifact": None,

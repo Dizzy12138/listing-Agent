@@ -213,10 +213,24 @@ class ExploreGenerationService:
                 issues=[s.issues[0] for s in scores if s.issues],
             )
 
+        context_summary = {
+            "knowledge_doc_ids": knowledge_doc_ids,
+            "asset_pack_ids": asset_pack_ids,
+            "asset_item_ids": asset_item_ids,
+            "inspiration_asset_ids": inspiration_asset_ids,
+            "standard_asset_ids": standard_asset_ids,
+            "knowledge_summary_used": knowledge_context["knowledge_summary_used"],
+            "knowledge_source": knowledge_context["knowledge_source"],
+            "standard_assets_used": [item["asset_item_id"] for item in asset_context["confirmed_items"]],
+            "excluded_unconfirmed_asset_item_ids": asset_context["excluded_unconfirmed_asset_item_ids"],
+        }
+
         # Build QA summary
         qa_summary = qa_agent.build_summary(product_id, run_id, all_scores)
+        qa_summary_data = qa_summary.model_dump()
+        qa_summary_data["context"] = context_summary
         qa_summary_path = explore_dir / "qa_summary.json"
-        qa_summary_path.write_text(qa_summary.model_dump_json(indent=2), encoding="utf-8")
+        qa_summary_path.write_text(json.dumps(qa_summary_data, indent=2, ensure_ascii=False), encoding="utf-8")
 
         # Build recommendation.json per type
         for type_key, scores in all_scores.items():
@@ -284,20 +298,10 @@ class ExploreGenerationService:
             "sku_brief": sku_brief.model_dump(),
             "creative_briefs": [b.model_dump() for b in brief_set.briefs],
             "candidates": {k: [c.model_dump() for c in v] for k, v in all_candidates.items()},
-            "qa_summary": qa_summary.model_dump(),
+            "qa_summary": qa_summary_data,
             "creative_version": creative_version.model_dump() if creative_version else None,
             "artifacts": artifacts,
-            "context": {
-                "knowledge_doc_ids": knowledge_doc_ids,
-                "asset_pack_ids": asset_pack_ids,
-                "asset_item_ids": asset_item_ids,
-                "inspiration_asset_ids": inspiration_asset_ids,
-                "standard_asset_ids": standard_asset_ids,
-                "knowledge_summary_used": knowledge_context["knowledge_summary_used"],
-                "knowledge_source": knowledge_context["knowledge_source"],
-                "standard_assets_used": [item["asset_item_id"] for item in asset_context["confirmed_items"]],
-                "excluded_unconfirmed_asset_item_ids": asset_context["excluded_unconfirmed_asset_item_ids"],
-            },
+            "context": context_summary,
             "traces": trace.records,
         }
 
