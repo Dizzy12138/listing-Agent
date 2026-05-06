@@ -1334,8 +1334,9 @@ async def api_batch_confirm_items(body: dict):
         group=body.get("group"),
         applicable_categories=body.get("applicable_categories"),
         applicable_image_types=body.get("applicable_image_types"),
+        return_report=True,
     )
-    return {"updated": len(updated), "items": updated}
+    return updated
 
 
 @app.patch("/api/asset-items/batch-disable")
@@ -1349,8 +1350,9 @@ async def api_batch_disable_items(body: dict):
         group=body.get("group"),
         applicable_categories=body.get("applicable_categories"),
         applicable_image_types=body.get("applicable_image_types"),
+        return_report=True,
     )
-    return {"updated": len(updated), "items": updated}
+    return updated
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

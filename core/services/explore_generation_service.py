@@ -79,17 +79,20 @@ class ExploreGenerationService:
         asset_context = self._load_asset_context(asset_pack_ids, asset_item_ids, inspiration_asset_ids)
         trace.add(
             step="context.load_knowledge_and_assets",
-            status="warning" if knowledge_context["warnings"] or asset_context["excluded_unconfirmed_asset_item_ids"] else "success",
+            status="warning" if knowledge_context["warnings"] or asset_context["excluded_unconfirmed_asset_item_ids"] or asset_context["missing_asset_item_ids"] else "success",
             input={
                 "knowledge_doc_ids": knowledge_doc_ids,
                 "asset_pack_ids": asset_pack_ids,
                 "asset_item_ids": asset_item_ids,
+                "requested_asset_item_ids": asset_item_ids,
                 "inspiration_asset_ids": inspiration_asset_ids,
                 "standard_asset_ids": standard_asset_ids,
                 "knowledge_source": knowledge_context["knowledge_source"],
                 "knowledge_summary_used": knowledge_context["knowledge_summary_used"],
                 "standard_assets_used": [item["asset_item_id"] for item in asset_context["confirmed_items"]],
+                "confirmed_asset_item_ids": [item["asset_item_id"] for item in asset_context["confirmed_items"]],
                 "excluded_unconfirmed_asset_item_ids": asset_context["excluded_unconfirmed_asset_item_ids"],
+                "missing_asset_item_ids": asset_context["missing_asset_item_ids"],
             },
             issues=knowledge_context["warnings"],
         )
@@ -222,7 +225,9 @@ class ExploreGenerationService:
             "knowledge_summary_used": knowledge_context["knowledge_summary_used"],
             "knowledge_source": knowledge_context["knowledge_source"],
             "standard_assets_used": [item["asset_item_id"] for item in asset_context["confirmed_items"]],
+            "confirmed_asset_item_ids": [item["asset_item_id"] for item in asset_context["confirmed_items"]],
             "excluded_unconfirmed_asset_item_ids": asset_context["excluded_unconfirmed_asset_item_ids"],
+            "missing_asset_item_ids": asset_context["missing_asset_item_ids"],
         }
 
         # Build QA summary
@@ -376,6 +381,7 @@ class ExploreGenerationService:
             "confirmed_items": [],
             "inspiration_items": [],
             "excluded_unconfirmed_asset_item_ids": [],
+            "missing_asset_item_ids": [],
         }
         try:
             from core.services.asset_service import get_item, get_pack, list_pack_items
@@ -391,6 +397,7 @@ class ExploreGenerationService:
         for item_id in item_ids:
             item = get_item(item_id)
             if not item:
+                context["missing_asset_item_ids"].append(item_id)
                 continue
             data = item.model_dump()
             if item.status == "confirmed":

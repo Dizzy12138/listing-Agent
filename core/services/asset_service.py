@@ -854,32 +854,41 @@ def batch_update_items(
     group: str = None,
     applicable_categories: list[str] = None,
     applicable_image_types: list[str] = None,
-) -> list[dict]:
+    return_report: bool = False,
+) -> list[dict] | dict:
     _load_all_packs()
     for pack_id in list(_packs.keys()):
         _load_pack_items(pack_id)
     updated = []
+    skipped = []
+    errors = []
     for iid in item_ids:
         item = _items.get(iid)
         if not item:
+            skipped.append(iid)
             continue
-        if status:
-            item.status = status
-        if tags is not None:
-            item.tags = _dedupe([*item.tags, *tags])
-        if group:
-            item.group = group
-        if applicable_categories is not None:
-            item.applicable_categories = applicable_categories
-        if applicable_image_types is not None:
-            item.applicable_image_types = applicable_image_types
-        updated.append(item.model_dump())
+        try:
+            if status:
+                item.status = status
+            if tags is not None:
+                item.tags = _dedupe([*item.tags, *tags])
+            if group:
+                item.group = group
+            if applicable_categories is not None:
+                item.applicable_categories = applicable_categories
+            if applicable_image_types is not None:
+                item.applicable_image_types = applicable_image_types
+            updated.append(item.model_dump())
+        except Exception as exc:
+            errors.append({"asset_item_id": iid, "error": str(exc)})
 
     # Persist changes to disk
     pack_ids = set(it.get("asset_pack_id") for it in updated if it.get("asset_pack_id"))
     for pid in pack_ids:
         _persist_pack_items(pid)
 
+    if return_report:
+        return {"items": updated, "updated": len(updated), "skipped": skipped, "errors": errors}
     return updated
 
 

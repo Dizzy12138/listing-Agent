@@ -324,9 +324,9 @@ async function renderRightPanel() {
     // Load asset packs
     let packs = [];
     packs = await fetchJsonList('/api/asset-packs', 'packs');
-    const confirmedPacks = packs.filter(p => p.parse_status === 'parsed');
+    const usablePacks = packs.filter(p => ['parsed', 'needs_review'].includes(p.parse_status));
     const confirmedItems = [];
-    for (const pack of confirmedPacks.slice(0, 4)) {
+    for (const pack of usablePacks.slice(0, 4)) {
         const items = await fetchJsonList(`/api/asset-packs/${pack.asset_pack_id}/items`, 'items');
         confirmedItems.push(...items.filter(it => it.status === 'confirmed').slice(0, 8));
     }
@@ -353,10 +353,10 @@ async function renderRightPanel() {
 
     // Assets section
     let assetsHtml = '';
-    if (confirmedPacks.length) {
-        assetsHtml = `<div class="ctx-section"><div class="ctx-section-title">🎨 素材包 (${confirmedPacks.length})</div>
-            ${confirmedPacks.map(p => `<div class="ctx-item"><span class="label">${p.name}</span><span class="ctx-tag">${p.item_count} 项</span></div>`).join('')}
-            ${confirmedItems.length ? `<div class="ctx-item"><span class="label">已确认素材项</span>${confirmedItems.slice(0,12).map(it => '<span class="ctx-tag">'+escapeHtml(it.name)+' · '+escapeHtml(it.group||'其他')+'</span>').join('')}</div>` : '<div class="ctx-item"><span class="label">已确认素材项</span>暂无，未确认素材不会进入生图任务</div>'}
+    if (usablePacks.length) {
+        assetsHtml = `<div class="ctx-section"><div class="ctx-section-title">🎨 素材包 (${usablePacks.length})</div>
+            ${usablePacks.map(p => `<div class="ctx-item"><span class="label">${p.name}</span><span class="ctx-tag">${p.item_count} 项</span></div>`).join('')}
+            ${confirmedItems.length ? `<div class="ctx-item"><span class="label">已确认素材项</span>${confirmedItems.slice(0,12).map(it => '<span class="ctx-tag">'+escapeHtml(it.name)+' · '+escapeHtml(it.group||'其他')+'</span>').join('')}</div>` : '<div class="ctx-item"><span class="label">已确认素材项</span>该素材包已有解析结果，但需先确认素材项后才能用于生图任务。</div>'}
         </div>`;
     } else {
         assetsHtml = `<div class="ctx-section"><div class="ctx-section-title">🎨 素材包</div>
@@ -543,9 +543,10 @@ async function appendWorkbenchContext(fd) {
     const docs = await fetchJsonList('/api/knowledge-docs', 'docs');
     const packs = await fetchJsonList('/api/asset-packs', 'packs');
     const docIds = docs.filter(d => d.parse_status === 'parsed').map(d => d.doc_id);
-    const packIds = packs.filter(p => p.parse_status === 'parsed').map(p => p.asset_pack_id);
+    const usablePacks = packs.filter(p => ['parsed', 'needs_review'].includes(p.parse_status));
+    const packIds = usablePacks.map(p => p.asset_pack_id);
     const confirmedItemIds = [];
-    for (const pack of packs.filter(p => p.parse_status === 'parsed')) {
+    for (const pack of usablePacks) {
         const items = await fetchJsonList(`/api/asset-packs/${pack.asset_pack_id}/items`, 'items');
         confirmedItemIds.push(...items.filter(it => it.status === 'confirmed').map(it => it.asset_item_id));
     }
@@ -600,6 +601,8 @@ function renderTasks() {
 
 /* ===== Assets Page ===== */
 let assetPacks = [];
+let currentPackItems = [];
+let currentPackId = '';
 async function renderAssets() {
     const area = document.getElementById('assetLibraryArea');
     try { assetPacks = await fetchJsonList('/api/asset-packs', 'packs'); } catch { assetPacks = []; }
@@ -628,24 +631,43 @@ async function triggerParse(packId) {
     pollPackStatus(packId);
 }
 async function viewPackItems(packId) {
-    const items = await fetchJsonList('/api/asset-packs/'+packId+'/items', 'items');
+    currentPackId = packId;
+    currentPackItems = await fetchJsonList('/api/asset-packs/'+packId+'/items', 'items');
+    renderPackItemsGrid();
+}
+function renderPackItemsGrid() {
     const area = document.getElementById('packItemsArea');
+    const status = document.getElementById('assetStatusFilter')?.value || 'all';
+    const group = document.getElementById('assetGroupFilter')?.value || 'all';
+    const items = currentPackItems.filter(it =>
+        (status === 'all' || it.status === status) &&
+        (group === 'all' || (it.group || '其他') === group)
+    );
     area.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-        <div style="font-size:14px;font-weight:600">素材项 (${items.length})</div>
-        <div style="display:flex;gap:6px">
-            <button class="btn btn-xs btn-primary" onclick="batchConfirmItems('${packId}')">✓ 批量确认</button>
-            <button class="btn btn-xs btn-secondary" onclick="batchDisableItems('${packId}')">✕ 批量禁用</button>
+        <div style="font-size:14px;font-weight:600">素材项 (${items.length}/${currentPackItems.length})</div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            <select class="form-select" id="assetStatusFilter" onchange="renderPackItemsGrid()" style="height:28px;width:120px">
+                ${['all','needs_review','auto_detected','confirmed','disabled'].map(v => `<option value="${v}" ${status===v?'selected':''}>${v==='all'?'全部状态':statusLabel(v)}</option>`).join('')}
+            </select>
+            <select class="form-select" id="assetGroupFilter" onchange="renderPackItemsGrid()" style="height:28px;width:100px">
+                ${['all','产品','功能','包装','箭头','其他'].map(v => `<option value="${v}" ${group===v?'selected':''}>${v==='all'?'全部分组':v}</option>`).join('')}
+            </select>
+            <input class="form-input" id="assetBatchTags" placeholder="批量标签，逗号分隔" style="height:28px;width:150px">
+            <button class="btn btn-xs btn-primary" onclick="batchConfirmItems(currentPackId)">✓ 批量确认</button>
+            <button class="btn btn-xs btn-secondary" onclick="batchDisableItems(currentPackId)">✕ 批量禁用</button>
+            <button class="btn btn-xs btn-secondary" onclick="batchTagItems(currentPackId)">＋ 加标签</button>
         </div>
     </div>
     <div class="asset-grid">${items.map(it => `<div class="asset-thumb" data-item-id="${it.asset_item_id}" onclick="this.classList.toggle('selected')" style="border:2px solid ${it.status==='confirmed'?'var(--success)':it.status==='disabled'?'var(--danger)':'var(--border)'}">
         <div class="asset-thumb-img">${it.preview_url ? '<img src="'+it.preview_url+'" style="width:100%;height:100%;object-fit:contain;">' : ((it.item_type||it.type)==='icon'?'🏷':'🎨')}</div>
-        <div class="asset-thumb-label"><strong>${escapeHtml(it.name)}</strong><br><span style="font-size:10px;color:var(--text-muted)">${escapeHtml(it.group || '其他')} · ${escapeHtml(it.item_type || it.type || '')}</span><br><span style="font-size:10px;color:var(--text-muted)">${(it.tags||[]).map(escapeHtml).join(', ')}</span><br><span class="tag ${it.status==='confirmed'?'tag-green':it.status==='disabled'?'tag-red':'tag-yellow'}" style="margin-top:2px">${statusLabel(it.status)}</span></div>
+        <div class="asset-thumb-label"><strong>${escapeHtml(it.name)}</strong><br><span style="font-size:10px;color:var(--text-muted)">${escapeHtml(it.group || '其他')} · ${escapeHtml(it.item_type || it.type || '')}</span><br><span style="font-size:10px;color:var(--text-muted)">source=${escapeHtml(it.source || '-')} · conf=${Number(it.confidence || 0).toFixed(2)}</span><br><span style="font-size:10px;color:var(--text-muted)">${escapeHtml((it.applicable_image_types||[]).join(', ') || '-')}</span><br><span style="font-size:10px;color:var(--text-muted)">${(it.tags||[]).map(escapeHtml).join(', ')}</span><br><span class="tag ${it.status==='confirmed'?'tag-green':it.status==='disabled'?'tag-gray':'tag-yellow'}" style="margin-top:2px">${statusLabel(it.status)}</span></div>
     </div>`).join('')}</div>`;
 }
 async function batchConfirmItems(packId) {
     const ids = [...document.querySelectorAll('#packItemsArea .asset-thumb.selected')].map(e=>e.dataset.itemId).filter(Boolean);
     if(!ids.length){toast('请先点击选择素材项','info');return;}
-    await fetch('/api/asset-items/batch-confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({asset_item_ids:ids,status:'confirmed'})});
+    const tags = parseCsv(document.getElementById('assetBatchTags')?.value || '');
+    await fetch('/api/asset-items/batch-confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({asset_item_ids:ids,status:'confirmed',tags})});
     toast(`已确认 ${ids.length} 个素材项`,'success'); viewPackItems(packId);
 }
 async function batchDisableItems(packId) {
@@ -654,6 +676,14 @@ async function batchDisableItems(packId) {
     await fetch('/api/asset-items/batch-disable',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({asset_item_ids:ids,status:'disabled'})});
     toast(`已禁用 ${ids.length} 个素材项`,'success'); viewPackItems(packId);
 }
+async function batchTagItems(packId) {
+    const ids = [...document.querySelectorAll('#packItemsArea .asset-thumb.selected')].map(e=>e.dataset.itemId).filter(Boolean);
+    const tags = parseCsv(document.getElementById('assetBatchTags')?.value || '');
+    if(!ids.length || !tags.length){toast('请选择素材项并输入标签','info');return;}
+    await fetch('/api/asset-items/batch-confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({asset_item_ids:ids,tags})});
+    toast(`已给 ${ids.length} 个素材项加标签`,'success'); viewPackItems(packId);
+}
+function parseCsv(text) { return String(text || '').split(',').map(s => s.trim()).filter(Boolean); }
 async function handlePackUpload(e) {
     e.preventDefault();
     const form = e.target;
@@ -743,12 +773,13 @@ function pollPackStatus(packId, maxRetries = 40, opId = 'asset:' + packId) {
             uploadOps[opId] = uploadOps[opId] || { scope: 'asset', name: p.name || packId, status: 'running' };
             uploadOps[opId].name = p.name || uploadOps[opId].name;
             uploadOps[opId].phase = statusLabel(p.parse_status);
-            uploadOps[opId].pct = p.parse_status === 'parsed' ? 100 : (p.parse_status === 'failed' || p.parse_status === 'error') ? 100 : Math.min(95, 55 + retries * 3);
-            uploadOps[opId].status = (p.parse_status === 'failed' || p.parse_status === 'error') ? 'error' : p.parse_status === 'parsed' ? 'done' : 'running';
-            if (p.parse_status === 'parsed' || p.parse_status === 'failed' || p.parse_status === 'error' || retries >= maxRetries) {
+            const finished = ['parsed', 'needs_review', 'failed', 'error'].includes(p.parse_status);
+            uploadOps[opId].pct = finished ? 100 : Math.min(95, 55 + retries * 3);
+            uploadOps[opId].status = (p.parse_status === 'failed' || p.parse_status === 'error') ? 'error' : finished ? 'done' : 'running';
+            if (finished || retries >= maxRetries) {
                 clearInterval(interval);
                 renderAssets();
-                if (p.parse_status === 'parsed') toast(`解析完成：${p.item_count} 个素材项`, 'success');
+                if (p.parse_status === 'parsed' || p.parse_status === 'needs_review') toast(`解析完成：${p.item_count} 个素材项`, 'success');
                 else if (p.parse_status === 'failed' || p.parse_status === 'error') toast('解析失败: ' + (p.error||''), 'error');
             } else {
                 renderAssets();
