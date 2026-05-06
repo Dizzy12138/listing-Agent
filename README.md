@@ -1,6 +1,6 @@
-# 电商产品批量生图平台 PoC
+# 电商产品批量生图平台
 
-Agent 模式 + 多模型融合的电商产品组图自动生成系统。
+Agent 模式 + 多模型融合的电商产品组图自动生成系统。当前代码库定位为内部 MVP：核心业务分层已具备产品化雏形，部署、队列、持久化、测试覆盖和权限体系仍按 `docs/PRODUCTION_READINESS.md` 的清单继续补齐。
 
 ## 核心原则
 
@@ -31,6 +31,41 @@ cp .env.example .env
 # 3. 运行 Pipeline (以 PCT020 猫爬架为例)
 python main.py pct020 ./products/pct020_white.png
 ```
+
+## Web 服务
+
+```bash
+uvicorn server:app --host 0.0.0.0 --port 8090
+```
+
+基础探活端点：
+
+```bash
+curl http://127.0.0.1:8090/api/health
+```
+
+## Docker 运行
+
+```bash
+docker compose up --build
+```
+
+容器会把 `output/`、`products/images/`、`assets/uploads/` 和 `assets/docs/` 挂载到本地，便于保留上传素材和生成结果。
+
+## 开发与测试
+
+```bash
+# 安装开发依赖
+pip install -r requirements-dev.txt
+
+# 运行单元测试
+pytest
+
+# 语法检查
+python3 -m compileall -q main.py server.py config.py agents core models pipeline
+```
+
+运行产物、上传文件和本地设置不会进入 git；需要长期保存的素材应进入对象存储或受控数据目录，而不是代码仓库。
 
 ## 项目结构
 

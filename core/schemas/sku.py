@@ -53,6 +53,10 @@ class SKU(BaseModel):
     image_plan: list[ImagePlanItem] = Field(default_factory=list)
     competitors: list[str] = Field(default_factory=list)
     internal_refs: list[str] = Field(default_factory=list)
+    knowledge_doc_ids: list[str] = Field(default_factory=list)
+    asset_pack_ids: list[str] = Field(default_factory=list)
+    standard_asset_item_ids: list[str] = Field(default_factory=list)
+    inspiration_asset_ids: list[str] = Field(default_factory=list)
     view_strategy: ViewStrategy = Field(default_factory=ViewStrategy)
 
     @field_validator("scene_requirements", mode="before")

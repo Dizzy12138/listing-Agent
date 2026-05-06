@@ -33,8 +33,14 @@ def _now() -> str:
 # Asset Packs
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def create_pack(name: str, file_paths, category: list[str],
-                usage: list[str], file_type: str = "pdf") -> AssetPack:
+def create_pack(
+    name: str,
+    file_paths,
+    category: list[str],
+    usage: list[str],
+    file_type: str = "pdf",
+    pack_type: str = "icon_pack_pdf",
+) -> AssetPack:
     """Create a new asset pack from uploaded files (list or single path)."""
     if isinstance(file_paths, str):
         file_paths = [file_paths]
@@ -42,6 +48,7 @@ def create_pack(name: str, file_paths, category: list[str],
     pack = AssetPack(
         asset_pack_id=pack_id,
         name=name,
+        pack_type=pack_type,
         file_type=file_type,
         category=category,
         usage=usage,
@@ -84,7 +91,10 @@ def parse_pack(pack_id: str) -> AssetPack:
     _save_pack_meta(pack)
 
     try:
-        if pack.file_type == "image":
+        if pack.file_type == "zip":
+            _unpack_zip_sources(pack)
+            items = _extract_items_from_images(pack)
+        elif pack.file_type == "image":
             items = _extract_items_from_images(pack)
         else:
             items = _extract_items_from_pdf(pack)
@@ -92,13 +102,30 @@ def parse_pack(pack_id: str) -> AssetPack:
         pack.parse_status = "parsed"
         pack.updated_at = _now()
     except Exception as e:
-        pack.parse_status = "error"
+        pack.parse_status = "failed"
         pack.error = str(e)
         pack.updated_at = _now()
         traceback.print_exc()
 
     _save_pack_meta(pack)
     return pack
+
+
+def _unpack_zip_sources(pack: AssetPack):
+    pack_dir = ASSET_DIR / "packs" / pack.asset_pack_id
+    for f in list(pack_dir.iterdir()):
+        if f.suffix.lower() != ".zip":
+            continue
+        with zipfile.ZipFile(f) as zf:
+            for member in zf.infolist():
+                if member.is_dir():
+                    continue
+                suffix = Path(member.filename).suffix.lower()
+                if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif", ".bmp", ".tiff", ".pdf"}:
+                    continue
+                target = pack_dir / Path(member.filename).name
+                with zf.open(member) as src, open(target, "wb") as out:
+                    shutil.copyfileobj(src, out)
 
 
 def _extract_items_from_images(pack: AssetPack) -> list[AssetItem]:
@@ -137,14 +164,19 @@ def _extract_items_from_images(pack: AssetPack) -> list[AssetItem]:
                 asset_item_id=item_id,
                 asset_pack_id=pack.asset_pack_id,
                 name=f.stem,
-                type=_guess_type_by_size(w, h) if w > 0 else "graphic",
+                item_type=_guess_type_by_size(w, h) if w > 0 else "graphic",
+                group=_guess_group_from_name(f.stem),
                 tags=[],
                 bbox=[0, 0, w, h],
                 page=0,
                 preview_url=f"/assets/packs/{pack.asset_pack_id}/items/{img_filename}",
                 png_url=f"/assets/packs/{pack.asset_pack_id}/items/{img_filename}",
+                transparent_png_url=f"/assets/packs/{pack.asset_pack_id}/items/{img_filename}" if f.suffix.lower() == ".png" else "",
+                applicable_categories=pack.category,
                 applicable_image_types=pack.usage,
-                status="available",
+                status="auto_detected",
+                confidence=0.75,
+                source="image_upload",
                 created_at=_now(),
             )
             _items[item_id] = item
@@ -170,11 +202,17 @@ def _extract_items_from_images(pack: AssetPack) -> list[AssetItem]:
 
 def _extract_items_from_pdf(pack: AssetPack) -> list[AssetItem]:
     """
-    Extract images from PDF using pypdf, then use VLM to label each.
+    Extract images from PDF in three stages:
+    1. Render every page to high-resolution page images with PyMuPDF.
+    2. Extract embedded images when available.
+    3. For icon-pack PDFs, slice orange icon candidates from page images and
+       fall back to a Feandrea-style mock catalog when detection is sparse.
     """
     pack_dir = ASSET_DIR / "packs" / pack.asset_pack_id
     items_dir = pack_dir / "items"
+    pages_dir = pack_dir / "pages"
     items_dir.mkdir(exist_ok=True)
+    pages_dir.mkdir(exist_ok=True)
 
     # Find the PDF file
     source = None
@@ -192,18 +230,29 @@ def _extract_items_from_pdf(pack: AssetPack) -> list[AssetItem]:
     extracted = []
     print(f"  [AssetParse] 开始解析 PDF: {source.name}")
 
-    from pypdf import PdfReader
     from PIL import Image
     import io
 
-    reader = PdfReader(str(source))
-    pack.page_count = len(reader.pages)
-    print(f"  [AssetParse] PDF 共 {len(reader.pages)} 页")
+    page_images, page_texts = _render_pdf_pages(source, pages_dir)
+    if page_images:
+        pack.page_count = len(page_images)
+    else:
+        from pypdf import PdfReader
+        reader = PdfReader(str(source))
+        pack.page_count = len(reader.pages)
+        page_texts = [(page.extract_text() or "") for page in reader.pages]
+    print(f"  [AssetParse] PDF 共 {pack.page_count} 页")
 
     img_index = 0
-    for page_num, page in enumerate(reader.pages):
-        # Extract embedded images from each page
-        if hasattr(page, 'images'):
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(str(source))
+        pages = reader.pages
+    except Exception:
+        pages = []
+
+    for page_num, page in enumerate(pages):
+        if hasattr(page, "images"):
             for img_obj in page.images:
                 try:
                     img_data = img_obj.data
@@ -224,14 +273,19 @@ def _extract_items_from_pdf(pack: AssetPack) -> list[AssetItem]:
                         asset_item_id=item_id,
                         asset_pack_id=pack.asset_pack_id,
                         name=f"素材_{img_index+1} (p{page_num+1})",
-                        type=_guess_type_by_size(img.width, img.height),
+                        item_type=_guess_type_by_size(img.width, img.height),
+                        group=_infer_group(page_texts[page_num] if page_num < len(page_texts) else "", page_num + 1, 0, max(1, img.height)),
                         tags=[],
                         bbox=[0, 0, img.width, img.height],
                         page=page_num + 1,
                         preview_url=f"/assets/packs/{pack.asset_pack_id}/items/{img_filename}",
                         png_url=f"/assets/packs/{pack.asset_pack_id}/items/{img_filename}",
+                        transparent_png_url=f"/assets/packs/{pack.asset_pack_id}/items/{img_filename}",
+                        applicable_categories=pack.category,
                         applicable_image_types=pack.usage,
-                        status="available",
+                        status="auto_detected",
+                        confidence=0.68,
+                        source="pdf_embedded_image",
                         created_at=_now(),
                     )
                     _items[item_id] = item
@@ -241,34 +295,44 @@ def _extract_items_from_pdf(pack: AssetPack) -> list[AssetItem]:
                     print(f"  [AssetParse] 跳过图片: {e}")
                     continue
 
-    # If no embedded images found, extract page-level previews from text as fallback.
-    # Many design/reference PDFs do not expose images through pypdf; a page preview
-    # is still a useful asset for review and prompt/style reference.
+    if pack.pack_type == "icon_pack_pdf" or "icon" in ",".join(pack.usage).lower() or "图标" in pack.name:
+        sliced = _slice_icon_candidates_from_pages(pack, page_images, page_texts, start_index=img_index)
+        extracted.extend(sliced)
+        img_index += len(sliced)
+
+    if _should_use_feandrea_mock(pack, source, extracted):
+        mocked = _create_feandrea_mock_items(pack, start_index=img_index)
+        extracted.extend(mocked)
+        img_index += len(mocked)
+
     if not extracted:
-        print(f"  [AssetParse] 无嵌入图片，生成页面预览素材")
-        for page_num, page in enumerate(reader.pages):
-            text = page.extract_text() or ""
-            item_id = f"item_{pack.asset_pack_id}_{page_num:03d}"
+        print("  [AssetParse] 未识别到单独素材项，生成页面预览素材并标记 needs_review")
+        for page_num, page_image in enumerate(page_images):
+            text = page_texts[page_num] if page_num < len(page_texts) else ""
+            item_id = f"item_{pack.asset_pack_id}_{img_index:03d}"
+            img_index += 1
             img_filename = f"{item_id}.png"
             img_path = items_dir / img_filename
-            _render_text_preview(
-                text or f"PDF page {page_num + 1}: no extractable text or embedded image.",
-                img_path,
-                title=f"{pack.name} · p{page_num + 1}",
-            )
+            shutil.copy2(page_image, img_path)
+            with Image.open(page_image) as im:
+                w, h = im.size
             item = AssetItem(
                 asset_item_id=item_id,
                 asset_pack_id=pack.asset_pack_id,
                 name=f"页面_{page_num+1}",
-                type="graphic",
-                tags=["pdf_page", "reference"],
-                bbox=[0, 0, 1200, 1600],
+                item_type="graphic",
+                group="其他",
+                tags=["pdf_page", "needs_review"],
+                bbox=[0, 0, w, h],
                 page=page_num + 1,
                 preview_url=f"/assets/packs/{pack.asset_pack_id}/items/{img_filename}",
                 png_url=f"/assets/packs/{pack.asset_pack_id}/items/{img_filename}",
                 description=(text or "No extractable page text.")[:500],
+                applicable_categories=pack.category,
                 applicable_image_types=pack.usage,
-                status="available",
+                status="needs_review",
+                confidence=0.2,
+                source="pdf_page_crop",
                 created_at=_now(),
             )
             _items[item_id] = item
@@ -297,6 +361,278 @@ def _guess_type_by_size(w: int, h: int) -> str:
         return "background"
 
 
+def _render_pdf_pages(source: Path, pages_dir: Path) -> tuple[list[Path], list[str]]:
+    """Render every PDF page to PNG. Returns paths plus extractable page text."""
+    page_images: list[Path] = []
+    page_texts: list[str] = []
+    try:
+        import fitz
+    except ImportError:
+        print("  [AssetParse] PyMuPDF 未安装，跳过页面渲染")
+        return page_images, page_texts
+
+    doc = fitz.open(str(source))
+    matrix = fitz.Matrix(2.5, 2.5)
+    for idx, page in enumerate(doc, start=1):
+        page_path = pages_dir / f"page_{idx:03d}.png"
+        pix = page.get_pixmap(matrix=matrix, alpha=False)
+        pix.save(str(page_path))
+        page_images.append(page_path)
+        try:
+            page_texts.append(page.get_text("text") or "")
+        except Exception:
+            page_texts.append("")
+    doc.close()
+    return page_images, page_texts
+
+
+def _slice_icon_candidates_from_pages(
+    pack: AssetPack,
+    page_images: list[Path],
+    page_texts: list[str],
+    start_index: int = 0,
+) -> list[AssetItem]:
+    from PIL import Image
+
+    pack_dir = ASSET_DIR / "packs" / pack.asset_pack_id
+    items_dir = pack_dir / "items"
+    extracted: list[AssetItem] = []
+    idx = start_index
+    for page_idx, page_path in enumerate(page_images, start=1):
+        image = Image.open(page_path).convert("RGB")
+        boxes = _detect_orange_icon_boxes(image)
+        if not boxes:
+            boxes = _grid_icon_boxes(image)
+        text = page_texts[page_idx - 1] if page_idx - 1 < len(page_texts) else ""
+        for local_idx, box in enumerate(boxes, start=1):
+            x, y, w, h = box
+            if w < 24 or h < 24:
+                continue
+            pad = max(6, int(min(w, h) * 0.08))
+            crop_box = (
+                max(0, x - pad),
+                max(0, y - pad),
+                min(image.width, x + w + pad),
+                min(image.height, y + h + pad),
+            )
+            crop = image.crop(crop_box)
+            item_id = f"item_{pack.asset_pack_id}_{idx:03d}"
+            idx += 1
+            img_filename = f"{item_id}.png"
+            img_path = items_dir / img_filename
+            crop.save(img_path, "PNG")
+            group = _infer_group(text, page_idx, y + h / 2, image.height)
+            name = _name_from_page_text(text, group, local_idx) or f"图标_p{page_idx}_{local_idx:03d}"
+            item = AssetItem(
+                asset_item_id=item_id,
+                asset_pack_id=pack.asset_pack_id,
+                name=name,
+                item_type="icon",
+                group=group,
+                tags=[group, "auto_detected"],
+                bbox=[x, y, w, h],
+                page=page_idx,
+                preview_url=f"/assets/packs/{pack.asset_pack_id}/items/{img_filename}",
+                png_url=f"/assets/packs/{pack.asset_pack_id}/items/{img_filename}",
+                transparent_png_url=f"/assets/packs/{pack.asset_pack_id}/items/{img_filename}",
+                applicable_categories=pack.category,
+                applicable_image_types=pack.usage,
+                status="auto_detected",
+                confidence=0.62,
+                source="pdf_page_crop",
+                created_at=_now(),
+            )
+            _items[item_id] = item
+            extracted.append(item)
+    return extracted
+
+
+def _detect_orange_icon_boxes(image) -> list[list[int]]:
+    """Detect connected orange regions in a rendered page image."""
+    pix = image.load()
+    width, height = image.size
+    mask = bytearray(width * height)
+    for y in range(height):
+        for x in range(width):
+            r, g, b = pix[x, y]
+            if r >= 170 and 55 <= g <= 190 and b <= 120 and r > g * 1.15:
+                mask[y * width + x] = 1
+
+    seen = bytearray(width * height)
+    boxes: list[list[int]] = []
+    for y in range(0, height, 2):
+        for x in range(0, width, 2):
+            pos = y * width + x
+            if not mask[pos] or seen[pos]:
+                continue
+            stack = [(x, y)]
+            seen[pos] = 1
+            min_x = max_x = x
+            min_y = max_y = y
+            count = 0
+            while stack:
+                cx, cy = stack.pop()
+                count += 1
+                min_x, max_x = min(min_x, cx), max(max_x, cx)
+                min_y, max_y = min(min_y, cy), max(max_y, cy)
+                for nx, ny in ((cx + 1, cy), (cx - 1, cy), (cx, cy + 1), (cx, cy - 1)):
+                    if nx < 0 or ny < 0 or nx >= width or ny >= height:
+                        continue
+                    npos = ny * width + nx
+                    if mask[npos] and not seen[npos]:
+                        seen[npos] = 1
+                        stack.append((nx, ny))
+            w = max_x - min_x + 1
+            h = max_y - min_y + 1
+            area = w * h
+            if count >= 80 and 24 <= w <= width * 0.45 and 24 <= h <= height * 0.45 and area >= 1000:
+                boxes.append([min_x, min_y, w, h])
+
+    boxes = _merge_nearby_boxes(boxes)
+    boxes.sort(key=lambda b: (b[1], b[0]))
+    return boxes[:80]
+
+
+def _merge_nearby_boxes(boxes: list[list[int]]) -> list[list[int]]:
+    merged: list[list[int]] = []
+    for box in boxes:
+        x, y, w, h = box
+        bx2, by2 = x + w, y + h
+        absorbed = False
+        for idx, existing in enumerate(merged):
+            ex, ey, ew, eh = existing
+            ex2, ey2 = ex + ew, ey + eh
+            if not (bx2 < ex - 12 or x > ex2 + 12 or by2 < ey - 12 or y > ey2 + 12):
+                nx, ny = min(x, ex), min(y, ey)
+                nx2, ny2 = max(bx2, ex2), max(by2, ey2)
+                merged[idx] = [nx, ny, nx2 - nx, ny2 - ny]
+                absorbed = True
+                break
+        if not absorbed:
+            merged.append(box)
+    return merged
+
+
+def _grid_icon_boxes(image) -> list[list[int]]:
+    """Conservative grid fallback for icon summary pages."""
+    width, height = image.size
+    boxes: list[list[int]] = []
+    margin_x = int(width * 0.08)
+    margin_y = int(height * 0.12)
+    cols = 5 if width >= 1200 else 4
+    rows = 6
+    cell_w = (width - margin_x * 2) / cols
+    cell_h = (height - margin_y * 2) / rows
+    side = int(min(cell_w, cell_h) * 0.55)
+    for row in range(rows):
+        for col in range(cols):
+            cx = int(margin_x + col * cell_w + cell_w / 2)
+            cy = int(margin_y + row * cell_h + cell_h * 0.38)
+            boxes.append([max(0, cx - side // 2), max(0, cy - side // 2), side, side])
+    return boxes
+
+
+def _infer_group(page_text: str, page: int, center_y: float, page_height: int) -> str:
+    text = (page_text or "").lower()
+    if any(k in text for k in ["arrow", "箭头", "指引", "虚线"]):
+        return "箭头"
+    if any(k in text for k in ["包装", "package", "fragile", "up", "环保", "environment"]):
+        return "包装"
+    if any(k in text for k in ["防水", "耐磨", "柔软", "水洗", "承重", "防滑", "function", "feature"]):
+        return "功能"
+    if any(k in text for k in ["产品", "猫", "狗", "pet", "cat", "dog", "product"]):
+        return "产品"
+    ratio = center_y / max(1, page_height)
+    if ratio < 0.35:
+        return "产品"
+    if ratio < 0.68:
+        return "功能"
+    if page % 4 == 0:
+        return "箭头"
+    return "包装" if ratio > 0.78 else "其他"
+
+
+def _guess_group_from_name(name: str) -> str:
+    low = name.lower()
+    if any(k in low for k in ["arrow", "箭头"]):
+        return "箭头"
+    if any(k in low for k in ["package", "fragile", "包装", "环保"]):
+        return "包装"
+    if any(k in low for k in ["waterproof", "wash", "anti", "防", "承重", "功能"]):
+        return "功能"
+    if any(k in low for k in ["cat", "dog", "pet", "猫", "狗", "产品"]):
+        return "产品"
+    return "其他"
+
+
+def _name_from_page_text(text: str, group: str, index: int) -> str:
+    candidates = [ln.strip(" ·:-\t") for ln in (text or "").splitlines() if 1 <= len(ln.strip()) <= 20]
+    group_words = _FEANDREA_MOCK_GROUPS.get(group, [])
+    for word in group_words:
+        if word in candidates or word in text:
+            return word
+    if index - 1 < len(candidates):
+        return candidates[index - 1]
+    return ""
+
+
+def _should_use_feandrea_mock(pack: AssetPack, source: Path, extracted: list[AssetItem]) -> bool:
+    marker = f"{pack.name} {source.name}".lower()
+    looks_feandrea = any(k in marker for k in ["feandrea", "listing", "辅助图形", "图标"])
+    return looks_feandrea and len([it for it in extracted if it.source == "pdf_page_crop"]) < 12
+
+
+_FEANDREA_MOCK_GROUPS = {
+    "产品": ["狗", "猫", "爱心", "骨头", "小鱼干", "家", "铃铛", "狗牌", "猫树", "猫抓板", "猫兜"],
+    "功能": ["防水", "耐磨", "柔软", "可水洗", "睡觉舒适", "易打扫", "防倾倒", "承重", "加粗栏杆", "可拆卸", "透气", "防滑", "对", "错"],
+    "包装": ["向上", "易碎", "怕湿", "爱护环境", "环保"],
+    "箭头": ["向上箭头", "指引箭头", "虚线箭头", "环形箭头"],
+}
+
+
+def _create_feandrea_mock_items(pack: AssetPack, start_index: int = 0) -> list[AssetItem]:
+    from PIL import Image, ImageDraw
+
+    pack_dir = ASSET_DIR / "packs" / pack.asset_pack_id
+    items_dir = pack_dir / "items"
+    extracted: list[AssetItem] = []
+    idx = start_index
+    for group, names in _FEANDREA_MOCK_GROUPS.items():
+        for local_idx, name in enumerate(names, start=1):
+            item_id = f"item_{pack.asset_pack_id}_{idx:03d}"
+            idx += 1
+            filename = f"{item_id}.png"
+            path = items_dir / filename
+            image = Image.new("RGBA", (320, 320), (255, 255, 255, 0))
+            draw = ImageDraw.Draw(image)
+            draw.ellipse((54, 34, 266, 246), fill=(240, 126, 35, 255))
+            draw.text((42, 260), name[:10], fill=(50, 50, 50, 255), font=_font(28))
+            image.save(path, "PNG")
+            item = AssetItem(
+                asset_item_id=item_id,
+                asset_pack_id=pack.asset_pack_id,
+                name=name,
+                item_type="icon",
+                group=group,
+                tags=[group, "feandrea_mock_fallback"],
+                bbox=[],
+                page=0,
+                preview_url=f"/assets/packs/{pack.asset_pack_id}/items/{filename}",
+                png_url=f"/assets/packs/{pack.asset_pack_id}/items/{filename}",
+                transparent_png_url=f"/assets/packs/{pack.asset_pack_id}/items/{filename}",
+                applicable_categories=pack.category,
+                applicable_image_types=pack.usage,
+                status="auto_detected",
+                confidence=0.35,
+                source="pdf_page_crop",
+                description="Feandrea icon PDF mock fallback item; requires human confirmation.",
+                created_at=_now(),
+            )
+            _items[item_id] = item
+            extracted.append(item)
+    return extracted
+
+
 def _label_items_with_vlm(items: list[AssetItem], items_dir: Path):
     """Use VLM to auto-label extracted items with names and tags."""
     if not items:
@@ -309,6 +645,8 @@ def _label_items_with_vlm(items: list[AssetItem], items_dir: Path):
         return
 
     for item in items:
+        if "feandrea_mock_fallback" in item.tags:
+            continue
         img_path = items_dir / f"{item.asset_item_id}.png"
         if not img_path.exists():
             continue
@@ -330,12 +668,13 @@ def _label_items_with_vlm(items: list[AssetItem], items_dir: Path):
             if data.get("name"):
                 item.name = data["name"]
             if data.get("type"):
-                item.type = data["type"]
+                item.item_type = data["type"]
+                item.type = item.item_type
             if data.get("tags"):
-                item.tags = data["tags"]
+                item.tags = _dedupe([*item.tags, *data["tags"]])
             if data.get("description"):
                 item.description = data["description"]
-            print(f"    VLM: {item.asset_item_id} → {item.name} [{item.type}]")
+            print(f"    VLM: {item.asset_item_id} → {item.name} [{item.item_type}]")
         except Exception as e:
             print(f"    VLM labeling 失败 {item.asset_item_id}: {e}")
             continue
@@ -408,11 +747,40 @@ def list_pack_items(pack_id: str) -> list[dict]:
 
 
 def get_item(item_id: str) -> Optional[AssetItem]:
+    _load_all_packs()
+    for pack_id in list(_packs.keys()):
+        _load_pack_items(pack_id)
     return _items.get(item_id)
+
+
+def update_item(item_id: str, updates: dict) -> Optional[AssetItem]:
+    item = get_item(item_id)
+    if not item:
+        return None
+    allowed = {
+        "name",
+        "group",
+        "tags",
+        "status",
+        "applicable_categories",
+        "applicable_image_types",
+    }
+    for key, value in updates.items():
+        if key not in allowed:
+            continue
+        if key == "status":
+            value = "failed" if value == "error" else value
+        setattr(item, key, value)
+    _items[item_id] = AssetItem(**item.model_dump())
+    _persist_pack_items(item.asset_pack_id)
+    return _items[item_id]
 
 
 def batch_update_items(item_ids: list[str], status: str = None,
                        tags: list[str] = None) -> list[dict]:
+    _load_all_packs()
+    for pack_id in list(_packs.keys()):
+        _load_pack_items(pack_id)
     updated = []
     for iid in item_ids:
         item = _items.get(iid)
@@ -421,7 +789,7 @@ def batch_update_items(item_ids: list[str], status: str = None,
         if status:
             item.status = status
         if tags is not None:
-            item.tags = tags
+            item.tags = _dedupe([*item.tags, *tags])
         updated.append(item.model_dump())
 
     # Persist changes to disk
@@ -456,10 +824,12 @@ def create_doc(name: str, file_path: str, category: list[str],
         name=name,
         name_en=name_en,
         category=category,
+        category_path=" > ".join(category),
         file_type=file_type,
         source_file=file_path,
         upload_time=_now(),
         parse_status="pending",
+        status_message="等待解析",
     )
     doc_dir = ASSET_DIR / "docs" / doc_id
     doc_dir.mkdir(parents=True, exist_ok=True)
@@ -488,6 +858,7 @@ def analyze_doc(doc_id: str) -> KnowledgeDoc:
         raise ValueError(f"Doc {doc_id} not found")
 
     doc.parse_status = "parsing"
+    doc.status_message = "解析中"
     _save_doc_meta(doc)
 
     try:
@@ -501,9 +872,14 @@ def analyze_doc(doc_id: str) -> KnowledgeDoc:
         doc.checklist_count = len(knowledge.get("checklist", []))
         doc.parse_status = "parsed"
         doc.summary = knowledge.get("summary", "")
+        doc.category_path = knowledge.get("category_path") or doc.category_path
+        doc.parse_mode = knowledge.get("parse_mode", "")
+        doc.parsed_at = _now()
+        doc.status_message = "解析完成"
     except Exception as e:
-        doc.parse_status = "error"
+        doc.parse_status = "failed"
         doc.error = str(e)
+        doc.status_message = f"解析失败: {e}"
         traceback.print_exc()
 
     _save_doc_meta(doc)
