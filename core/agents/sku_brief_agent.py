@@ -49,9 +49,15 @@ class SKUBriefAgent:
         import config
         self.model = model or config.MODELS.get("quality", "gpt-5.2")
 
-    def generate_brief(self, sku: SKU, product_image: Image.Image | None = None) -> SKUBrief:
+    def generate_brief(
+        self,
+        sku: SKU,
+        product_image: Image.Image | None = None,
+        knowledge_context: dict | None = None,
+    ) -> SKUBrief:
         """Generate SKUBrief from SKU data and optionally a product image."""
         console.print(f"[bold cyan]SKUBriefAgent:[/] 提取商品身份 - {sku.product_id}")
+        knowledge_context = knowledge_context or {}
 
         sku_data = {
             "product_id": sku.product_id,
@@ -61,6 +67,10 @@ class SKUBriefAgent:
             "target_audience": sku.target_audience,
             "selling_points": sku.selling_points,
             "keywords": sku.keywords,
+            "knowledge_category_path": knowledge_context.get("category_path", ""),
+            "knowledge_global_rules": knowledge_context.get("global_rules", []),
+            "knowledge_keyword_bank": knowledge_context.get("keyword_bank", []),
+            "knowledge_replaceable_variables": knowledge_context.get("replaceable_variables", []),
         }
 
         try:
@@ -77,15 +87,16 @@ class SKUBriefAgent:
             data = self._parse_json(response)
             if data and "core_identity" in data:
                 console.print(f"  ✅ VLM 商品身份提取: {len(data['core_identity'])} 个特征")
-                return SKUBrief(**data)
+                return self._apply_knowledge_to_brief(SKUBrief(**data), knowledge_context)
         except Exception as exc:
             console.print(f"  ⚠️ VLM 提取失败: {exc}，使用 fallback", style="yellow")
 
-        return self._fallback_brief(sku)
+        return self._fallback_brief(sku, knowledge_context)
 
-    def _fallback_brief(self, sku: SKU) -> SKUBrief:
+    def _fallback_brief(self, sku: SKU, knowledge_context: dict | None = None) -> SKUBrief:
         """Structured extraction from SKU JSON without VLM."""
         console.print("  → fallback: 从 SKU JSON 直接提取商品身份")
+        knowledge_context = knowledge_context or {}
 
         # Extract product type from name
         name = sku.name or ""
@@ -107,7 +118,7 @@ class SKUBriefAgent:
             if sp and sp not in must_show:
                 must_show.append(sp[:50])
 
-        return SKUBrief(
+        brief = SKUBrief(
             sku_id=sku.product_id,
             product_type=product_type,
             core_identity=core_identity,
@@ -118,6 +129,32 @@ class SKUBriefAgent:
                 "flexible": ["exact number of posts", "exact platform position", "minor perspective changes"],
             },
         )
+        return self._apply_knowledge_to_brief(brief, knowledge_context)
+
+    def _apply_knowledge_to_brief(self, brief: SKUBrief, knowledge_context: dict) -> SKUBrief:
+        brief.knowledge_doc_ids = knowledge_context.get("knowledge_doc_ids", [])
+        brief.knowledge_context = knowledge_context
+        brief.knowledge_rules_used = knowledge_context.get("knowledge_rules_used", [])
+        brief.negative_prompts_used = knowledge_context.get("negative_prompts_used", [])
+        brief.standard_assets_used = knowledge_context.get("standard_asset_names", [])
+        if knowledge_context.get("category_path"):
+            label = f"category path: {knowledge_context['category_path']}"
+            if label not in brief.core_identity:
+                brief.core_identity.append(label)
+        for keyword in (knowledge_context.get("keyword_bank") or [])[:12]:
+            if keyword not in brief.core_identity:
+                brief.core_identity.append(keyword)
+        for rule in (knowledge_context.get("global_rules") or [])[:8]:
+            if rule not in brief.must_show:
+                brief.must_show.append(rule)
+        for variable in (knowledge_context.get("replaceable_variables") or [])[:8]:
+            label = f"replaceable variable: {variable}"
+            if label not in brief.must_show:
+                brief.must_show.append(label)
+        for negative in (knowledge_context.get("negative_prompts") or [])[:12]:
+            if negative not in brief.sku_consistency_rules["strict"]:
+                brief.sku_consistency_rules["strict"].append(negative)
+        return brief
 
     def _parse_json(self, text: str) -> dict:
         text = text.strip()

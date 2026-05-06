@@ -13,6 +13,11 @@ class SKUBrief(BaseModel):
     target_audience: list[str] = Field(default_factory=list)
     must_show: list[str] = Field(default_factory=list)
     sku_consistency_rules: dict = Field(default_factory=lambda: {"strict": [], "flexible": []})
+    knowledge_doc_ids: list[str] = Field(default_factory=list)
+    knowledge_context: dict = Field(default_factory=dict)
+    knowledge_rules_used: list[str] = Field(default_factory=list)
+    negative_prompts_used: list[str] = Field(default_factory=list)
+    standard_assets_used: list[str] = Field(default_factory=list)
 
 
 class CreativeBrief(BaseModel):
@@ -27,6 +32,11 @@ class CreativeBrief(BaseModel):
     sku_consistency_level: str = "medium_high"  # high / medium_high / medium / low
     negative: list[str] = Field(default_factory=list)
     material_focus: str = ""  # For material_detail type
+    knowledge_doc_ids: list[str] = Field(default_factory=list)
+    knowledge_rules_used: list[str] = Field(default_factory=list)
+    negative_prompts_used: list[str] = Field(default_factory=list)
+    standard_assets_used: list[str] = Field(default_factory=list)
+    checklist_used: list[str] = Field(default_factory=list)
 
 
 class CreativeBriefSet(BaseModel):

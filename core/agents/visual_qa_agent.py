@@ -32,6 +32,8 @@ Product Identity:
 
 Image Purpose: {image_type}
 Visual Goal: {visual_goal}
+Knowledge Checklist:
+{knowledge_checklist}
 
 Evaluate this image on these dimensions (0-100 each):
 
@@ -200,6 +202,7 @@ class VisualQAAgent:
             must_show=", ".join(sku_brief.must_show[:5]),
             image_type=brief.image_type,
             visual_goal=brief.visual_goal,
+            knowledge_checklist="\n".join(f"- {item}" for item in self._checklist_for(brief, sku_brief)[:12]) or "- none",
         )
         response = chat(prompt=prompt, model=self.model, image=image, response_format="json")
         return self._parse_json(response)
@@ -215,10 +218,17 @@ class VisualQAAgent:
             scene_score=base,
             defect_score=60,
             selling_point_score=base,
-            issues=["visual_qa_source=manual_required: no VLM available for automated review"],
+            issues=[
+                "visual_qa_source=manual_required: no VLM available for automated review",
+                *[f"manual_checklist: {item}" for item in brief.checklist_used[:6]],
+            ],
             decision="needs_review",
             visual_qa_source="manual_required",
         )
+
+    def _checklist_for(self, brief: CreativeBrief, sku_brief: SKUBrief) -> list[str]:
+        context = sku_brief.knowledge_context or {}
+        return list(dict.fromkeys([*brief.checklist_used, *(context.get("checklist") or [])]))
 
     def _parse_json(self, text: str) -> dict | None:
         text = text.strip()

@@ -133,6 +133,10 @@ class KnowledgeRuleCreate(BaseModel):
     status: str = "candidate"
 
 
+class KnowledgeDocRulesUpdate(BaseModel):
+    parsed_knowledge: dict = Field(default_factory=dict)
+
+
 # --- Routes ---
 @app.get("/")
 async def index():
@@ -1409,6 +1413,18 @@ async def api_analyze_doc(doc_id: str):
     if not doc:
         raise HTTPException(404, "文档不存在")
     doc = asset_service.analyze_doc(doc_id)
+    return doc.model_dump()
+
+
+@app.patch("/api/knowledge-docs/{doc_id}/rules")
+async def api_update_doc_rules(doc_id: str, body: KnowledgeDocRulesUpdate):
+    doc = asset_service.get_doc(doc_id)
+    if not doc:
+        raise HTTPException(404, "文档不存在")
+    try:
+        doc = asset_service.update_doc_knowledge(doc_id, body.parsed_knowledge)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc))
     return doc.model_dump()
 
 

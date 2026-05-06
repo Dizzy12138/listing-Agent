@@ -943,6 +943,31 @@ def get_doc(doc_id: str) -> Optional[KnowledgeDoc]:
     return _docs.get(doc_id)
 
 
+def update_doc_knowledge(doc_id: str, parsed_knowledge: dict) -> KnowledgeDoc:
+    """Persist manually reviewed knowledge rules for a document."""
+    doc = get_doc(doc_id)
+    if not doc:
+        raise ValueError(f"Doc {doc_id} not found")
+
+    knowledge = dict(parsed_knowledge or {})
+    doc.parsed_knowledge = knowledge
+    doc.category_path = knowledge.get("category_path") or doc.category_path
+    doc.parse_mode = knowledge.get("parse_mode") or doc.parse_mode
+    doc.rule_count = (
+        len(knowledge.get("global_rules", []))
+        + len(knowledge.get("scene_rules", []))
+        + len(knowledge.get("style_rules", []))
+    )
+    doc.checklist_count = len(knowledge.get("checklist", []))
+    if doc.parse_status not in {"parsed", "failed"}:
+        doc.parse_status = "parsed"
+    doc.status_message = "规则已人工更新"
+    doc.parsed_at = doc.parsed_at or _now()
+    _docs[doc_id] = doc
+    _save_doc_meta(doc)
+    return doc
+
+
 def analyze_doc(doc_id: str) -> KnowledgeDoc:
     """Analyze a knowledge document: extract text, then use LLM to parse rules."""
     doc = get_doc(doc_id)

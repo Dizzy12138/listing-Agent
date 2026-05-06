@@ -7,6 +7,7 @@ running server. Pass --base-url http://host:port to check a live deployment.
 from __future__ import annotations
 
 import argparse
+import json
 import time
 import sys
 from pathlib import Path
@@ -102,13 +103,21 @@ def _confirm_items_flow(request, pack_id: str, items: list[dict]) -> tuple[bool,
     return True, confirm_ids, f"{len(confirm_ids)} items confirmed"
 
 
-def _run_explore_smoke(request, product_id: str, confirmed_ids: list[str], unconfirmed_id: str) -> tuple[bool, str]:
+def _run_explore_smoke(
+    request,
+    product_id: str,
+    confirmed_ids: list[str],
+    unconfirmed_id: str = "",
+    knowledge_doc_ids: list[str] | None = None,
+) -> tuple[bool, str]:
+    knowledge_doc_ids = knowledge_doc_ids or []
     response = request(
         "POST",
         "/api/explore-tasks",
         data={
             "product_id": product_id,
-            "asset_item_ids": ",".join([*confirmed_ids, unconfirmed_id]),
+            "knowledge_doc_ids": ",".join(knowledge_doc_ids),
+            "asset_item_ids": ",".join([item_id for item_id in [*confirmed_ids, unconfirmed_id] if item_id]),
             "standard_asset_ids": ",".join(confirmed_ids),
             "size": "2000x2000",
             "candidate_count": "1",
@@ -137,16 +146,61 @@ def _run_explore_smoke(request, product_id: str, confirmed_ids: list[str], uncon
     used = set(context.get("standard_assets_used") or context.get("confirmed_asset_item_ids") or [])
     excluded = set(context.get("excluded_unconfirmed_asset_item_ids") or [])
     requested = set(context.get("asset_item_ids") or [])
-    if not set(confirmed_ids).issubset(used):
+    if confirmed_ids and not set(confirmed_ids).issubset(used):
         return False, f"confirmed assets missing from standard_assets_used: used={sorted(used)}"
-    _ok("confirmed assets used")
-    if unconfirmed_id not in excluded:
+    if confirmed_ids:
+        _ok("confirmed assets used")
+    if unconfirmed_id and unconfirmed_id not in excluded:
         return False, f"unconfirmed asset not excluded: excluded={sorted(excluded)}"
-    _ok("unconfirmed assets excluded")
-    if not requested:
+    if unconfirmed_id:
+        _ok("unconfirmed assets excluded")
+    if (confirmed_ids or unconfirmed_id) and not requested:
         return False, "qa summary context missing asset_item_ids"
-    _ok("qa summary context")
+    if confirmed_ids or unconfirmed_id:
+        _ok("qa summary context")
+    if knowledge_doc_ids:
+        ok, detail = _check_explore_knowledge_outputs(task, knowledge_doc_ids)
+        if not ok:
+            return False, detail
     return True, f"task_id={task_id}"
+
+
+def _check_explore_knowledge_outputs(task: dict, knowledge_doc_ids: list[str]) -> tuple[bool, str]:
+    explore_dir = Path(task.get("explore_dir") or task.get("result", {}).get("explore_dir") or "")
+    if not explore_dir.exists():
+        return False, f"missing explore_dir: {explore_dir}"
+
+    briefs_path = explore_dir / "creative_briefs.json"
+    qa_path = explore_dir / "qa_summary.json"
+    if not briefs_path.exists() or not qa_path.exists():
+        return False, "missing creative_briefs.json or qa_summary.json"
+
+    briefs_data = json.loads(briefs_path.read_text(encoding="utf-8"))
+    briefs = briefs_data.get("briefs", []) if isinstance(briefs_data, dict) else []
+    if not briefs or not any(b.get("knowledge_doc_ids") for b in briefs):
+        return False, "creative_briefs missing knowledge_doc_ids"
+    if not any(b.get("knowledge_rules_used") for b in briefs):
+        return False, "creative_briefs missing knowledge_rules_used"
+    _ok("creative briefs knowledge refs")
+
+    candidate_files = [p for p in explore_dir.glob("*/*.json") if not p.name.endswith("_qa.json") and p.name != "recommendation.json"]
+    if not candidate_files:
+        return False, "missing candidate metadata json"
+    candidate = json.loads(candidate_files[0].read_text(encoding="utf-8"))
+    if not set(knowledge_doc_ids).intersection(candidate.get("knowledge_doc_ids") or []):
+        return False, "candidate missing knowledge_doc_ids"
+    if not candidate.get("knowledge_rules_used"):
+        return False, "candidate missing knowledge_rules_used"
+    _ok("candidate knowledge refs")
+
+    qa = json.loads(qa_path.read_text(encoding="utf-8"))
+    context = qa.get("context") or {}
+    if not set(knowledge_doc_ids).intersection(context.get("knowledge_doc_ids") or []):
+        return False, "qa_summary.context missing knowledge_doc_ids"
+    if not context.get("knowledge_rules_used"):
+        return False, "qa_summary.context missing knowledge_rules_used"
+    _ok("qa summary knowledge refs")
+    return True, "knowledge refs ok"
 
 
 def main() -> int:
@@ -165,6 +219,7 @@ def main() -> int:
         return _client_request(method, path, **kwargs)
 
     checks: list[bool] = []
+    knowledge_doc_ids: list[str] = []
     for label, method, path in [
         ("health", "GET", "/api/health"),
         ("knowledge-docs list", "GET", "/api/knowledge-docs"),
@@ -195,6 +250,15 @@ def main() -> int:
             if response.status_code == 200 and response.json().get("doc_id"):
                 _ok("knowledge doc upload")
                 checks.append(True)
+                doc_id = response.json().get("doc_id")
+                analyze_response = request("POST", f"/api/knowledge-docs/{doc_id}/analyze")
+                analyzed = analyze_response.json() if analyze_response.status_code == 200 else {}
+                if analyze_response.status_code == 200 and analyzed.get("parsed_knowledge"):
+                    _ok("knowledge doc analyze")
+                    checks.append(True)
+                    knowledge_doc_ids.append(doc_id)
+                else:
+                    checks.append(_fail("knowledge doc analyze", f"HTTP {analyze_response.status_code}: {analyze_response.text[:300]}"))
             else:
                 checks.append(_fail("knowledge doc upload", f"HTTP {response.status_code}: {response.text[:200]}"))
 
@@ -271,11 +335,24 @@ def main() -> int:
                                     args.product_id,
                                     confirmed_ids,
                                     unconfirmed,
+                                    knowledge_doc_ids=knowledge_doc_ids,
                                 )
                                 if explore_ok:
                                     checks.append(True)
                                 else:
                                     checks.append(_fail("explore context smoke", explore_detail))
+    if args.run_explore_smoke and knowledge_doc_ids and not args.pack_file:
+        explore_ok, explore_detail = _run_explore_smoke(
+            request,
+            args.product_id,
+            [],
+            "",
+            knowledge_doc_ids=knowledge_doc_ids,
+        )
+        if explore_ok:
+            checks.append(True)
+        else:
+            checks.append(_fail("explore knowledge smoke", explore_detail))
 
     if all(checks):
         print("PASS asset workflow self-check")

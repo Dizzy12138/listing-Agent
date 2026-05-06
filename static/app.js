@@ -339,12 +339,13 @@ async function renderRightPanel() {
         if (!Object.keys(k).length && doc.doc_id) {
             try { const r = await fetch(`/api/knowledge-docs/${doc.doc_id}/summary`); const d = await r.json(); k = d.knowledge || {}; } catch {}
         }
-        knowledgeHtml = `<div class="ctx-section"><div class="ctx-section-title">📂 品类知识 · ${doc.name}</div>
-            ${k.category_path ? `<div class="ctx-item"><span class="label">品类路径</span>${k.category_path}</div>` : ''}
-            ${(k.global_rules||[]).length ? `<div class="ctx-item"><span class="label">全局规则</span>${k.global_rules.map(r=>'<div>• '+r+'</div>').join('')}</div>` : ''}
-            ${(k.scene_rules||[]).length ? `<div class="ctx-item"><span class="label">场景规则</span>${k.scene_rules.map(r=>'<div>• '+r+'</div>').join('')}</div>` : ''}
-            ${(k.negative_prompts||[]).length ? `<div class="ctx-item"><span class="label">负面规则</span><div>${k.negative_prompts.map(r=>'<span class="ctx-tag">'+r+'</span>').join('')}</div></div>` : ''}
-            ${(k.checklist||[]).length ? `<div class="ctx-item"><span class="label">检查清单</span><ul class="ctx-checklist">${k.checklist.map(c=>'<li>'+c+'</li>').join('')}</ul></div>` : ''}
+        knowledgeHtml = `<div class="ctx-section"><div class="ctx-section-title">📂 品类知识 · ${escapeHtml(doc.name)}</div>
+            ${k.parse_mode === 'local_heuristic_fallback' ? '<div class="ctx-item"><span class="tag tag-yellow">规则待复核</span></div>' : ''}
+            ${k.category_path ? `<div class="ctx-item"><span class="label">品类路径</span>${escapeHtml(k.category_path)}</div>` : ''}
+            ${(k.global_rules||[]).length ? `<div class="ctx-item"><span class="label">全局规则</span>${renderKnowledgeList(k.global_rules)}</div>` : ''}
+            ${(k.scene_rules||[]).length ? `<div class="ctx-item"><span class="label">场景规则</span>${renderKnowledgeList(k.scene_rules)}</div>` : ''}
+            ${(k.negative_prompts||[]).length ? `<div class="ctx-item"><span class="label">负面规则</span><div>${normalizeRuleItems(k.negative_prompts).map(r=>'<span class="ctx-tag">'+escapeHtml(r.text)+'</span>').join('')}</div></div>` : ''}
+            ${(k.checklist||[]).length ? `<div class="ctx-item"><span class="label">检查清单</span><ul class="ctx-checklist">${normalizeRuleItems(k.checklist).map(c=>'<li>'+escapeHtml(c.text)+'</li>').join('')}</ul></div>` : ''}
         </div>`;
     } else {
         knowledgeHtml = `<div class="ctx-section"><div class="ctx-section-title">📂 品类知识</div>
@@ -922,7 +923,9 @@ async function viewDocSummary(docId) {
     const d = await r.json();
     const k = d.parsed_knowledge || {};
     const area = document.getElementById('docSummaryArea');
+    const needsReview = d.parse_status === 'failed' || d.parse_mode === 'local_heuristic_fallback' || k.parse_mode === 'local_heuristic_fallback';
     area.innerHTML = `<div class="settings-card"><h3>📋 ${d.summary||d.name||docId}</h3>
+        ${needsReview ? '<div class="tag tag-yellow" style="margin-bottom:10px">规则待复核</div>' : ''}
         <div class="ctx-item"><span class="label">解析模式</span>${k.parse_mode === 'llm_chunked' ? 'LLM 分块提取' : k.parse_mode === 'local_heuristic_fallback' ? '本地兜底（LLM 未成功）' : (k.parse_mode || '-')}</div>
         ${k.llm_model ? `<div class="ctx-item"><span class="label">LLM 模型</span>${escapeHtml(k.llm_model)}</div>` : ''}
         ${k.fallback_reason ? `<div class="ctx-item"><span class="label">兜底原因</span><span class="inline-error">${escapeHtml(k.fallback_reason)}</span></div>` : ''}
@@ -932,14 +935,25 @@ async function viewDocSummary(docId) {
         <div class="ctx-item"><span class="label">Prompt 模板</span>${renderKnowledgeList(k.prompt_templates)}</div>
         <div class="ctx-item"><span class="label">场景规则</span>${renderKnowledgeList(k.scene_rules)}</div>
         <div class="ctx-item"><span class="label">风格规则</span>${renderKnowledgeList(k.style_rules)}</div>
-        <div class="ctx-item"><span class="label">负面提示词</span>${(k.negative_prompts||[]).map(r=>'<span class="ctx-tag">'+escapeHtml(r)+'</span>').join('')}</div>
-        <div class="ctx-item"><span class="label">检查清单</span><ul class="ctx-checklist">${(k.checklist||[]).map(c=>'<li>'+escapeHtml(c)+'</li>').join('')}</ul></div>
-        <div class="ctx-item"><span class="label">关键词库</span>${(k.keyword_bank||[]).map(r=>'<span class="ctx-tag">'+escapeHtml(r)+'</span>').join('')}</div>
+        <div class="ctx-item"><span class="label">负面提示词</span>${normalizeRuleItems(k.negative_prompts).map(r=>'<span class="ctx-tag">'+escapeHtml(r.text)+'</span>').join('')}</div>
+        <div class="ctx-item"><span class="label">检查清单</span><ul class="ctx-checklist">${normalizeRuleItems(k.checklist).map(c=>'<li>'+escapeHtml(c.text)+'</li>').join('')}</ul></div>
+        <div class="ctx-item"><span class="label">关键词库</span>${normalizeRuleItems(k.keyword_bank).map(r=>'<span class="ctx-tag">'+escapeHtml(r.text)+'</span>').join('')}</div>
+        <div class="rule-review" data-doc-id="${escapeHtml(docId)}">
+            <h3 style="margin-top:18px">Knowledge Rule Review</h3>
+            ${renderRuleEditor('global_rules', '全局规则', k.global_rules)}
+            ${renderRuleEditor('scene_rules', '场景规则', k.scene_rules)}
+            ${renderRuleEditor('style_rules', '风格规则', k.style_rules)}
+            ${renderRuleEditor('negative_prompts', '负面提示词', k.negative_prompts)}
+            ${renderRuleEditor('checklist', '检查清单', k.checklist)}
+            ${renderRuleEditor('keyword_bank', '关键词库', k.keyword_bank)}
+            <button class="btn btn-primary btn-sm" onclick="saveKnowledgeRules('${docId}')">保存规则</button>
+        </div>
     </div>`;
+    area.dataset.knowledge = JSON.stringify(k);
 }
 
 function renderKnowledgeList(items) {
-    return (items || []).map(r => '<div>• ' + escapeHtml(r) + '</div>').join('') || '-';
+    return (items || []).map(r => '<div>• ' + escapeHtml(ruleText(r)) + (ruleEnabled(r) ? '' : ' <span class="tag tag-gray">停用</span>') + '</div>').join('') || '-';
 }
 
 function renderKnowledgeObjects(items) {
@@ -947,6 +961,73 @@ function renderKnowledgeObjects(items) {
         if (typeof item === 'string') return '<div>• ' + escapeHtml(item) + '</div>';
         return `<div>• ${escapeHtml(item.name || item.type || 'template')}：${escapeHtml(item.goal || '')}</div>`;
     }).join('') || '-';
+}
+
+function ruleText(item) {
+    if (item && typeof item === 'object') return item.text || item.statement || item.value || item.name || item.goal || '';
+    return item || '';
+}
+
+function ruleEnabled(item) {
+    return !(item && typeof item === 'object' && item.enabled === false);
+}
+
+function normalizeRuleItems(items) {
+    return (items || []).map(item => ({ text: ruleText(item), enabled: ruleEnabled(item) })).filter(item => item.text);
+}
+
+function renderRuleEditor(field, label, items) {
+    const rows = normalizeRuleItems(items);
+    const html = rows.length ? rows.map(item => `
+        <div class="rule-row" data-field="${field}">
+            <input type="checkbox" ${item.enabled ? 'checked' : ''} title="启用">
+            <input type="text" value="${escapeHtml(item.text)}">
+        </div>`).join('') : `
+        <div class="rule-row" data-field="${field}">
+            <input type="checkbox" checked title="启用">
+            <input type="text" value="">
+        </div>`;
+    return `<div class="rule-editor" data-field="${field}">
+        <div class="ctx-item"><span class="label">${label}</span><div class="rule-list">${html}</div>
+        <button class="btn btn-xs btn-secondary" type="button" onclick="addRuleRow('${field}')">添加规则</button></div>
+    </div>`;
+}
+
+function addRuleRow(field) {
+    const list = document.querySelector(`.rule-editor[data-field="${field}"] .rule-list`);
+    if (!list) return;
+    const row = document.createElement('div');
+    row.className = 'rule-row';
+    row.dataset.field = field;
+    row.innerHTML = '<input type="checkbox" checked title="启用"><input type="text" value="">';
+    list.appendChild(row);
+    row.querySelector('input[type="text"]')?.focus();
+}
+
+async function saveKnowledgeRules(docId) {
+    const area = document.getElementById('docSummaryArea');
+    const knowledge = JSON.parse(area.dataset.knowledge || '{}');
+    ['global_rules','scene_rules','style_rules','negative_prompts','checklist','keyword_bank'].forEach(field => {
+        knowledge[field] = Array.from(area.querySelectorAll(`.rule-row[data-field="${field}"]`)).map(row => {
+            const input = row.querySelector('input[type="text"]');
+            return {
+                text: input?.value?.trim() || '',
+                enabled: !!row.querySelector('input[type="checkbox"]')?.checked,
+            };
+        }).filter(item => item.text);
+    });
+    const r = await fetch('/api/knowledge-docs/'+docId+'/rules', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ parsed_knowledge: knowledge }),
+    });
+    if (!r.ok) {
+        toast('保存规则失败', 'error');
+        return;
+    }
+    toast('规则已保存', 'success');
+    await viewDocSummary(docId);
+    renderKb();
 }
 async function handleDocUpload(e) {
     e.preventDefault();

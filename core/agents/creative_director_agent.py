@@ -41,6 +41,7 @@ RULES:
 - hero_scene: low-angle, dramatic height, luxury room, must feel premium and tall. Include a cat or child for scale. consistency=medium_high.
 - lifestyle_scene: warm family moment, multi-cat or child interaction, cozy premium home. consistency=medium.
 - material_detail: macro/closeup of specific materials. Generate 4 briefs for: plush_fabric, sisal_rope, board_ramp, cat_scratching_sisal.
+- Apply knowledge_context.image_plan_templates, scene_rules, style_rules, negative_prompts and standard asset names from the Product Identity JSON whenever present.
 
 Return a JSON array of creative briefs.
 Output ONLY the JSON array, no markdown code blocks."""
@@ -155,13 +156,13 @@ class CreativeDirectorAgent:
         fallback_briefs = []
         for it in image_types:
             if it not in covered_types:
-                fb = self._fallback_plan([it])
+                fb = self._fallback_plan([it], sku_brief)
                 fallback_briefs.extend(fb)
                 console.print(f"  → fallback 补充: {it} ({len(fb)} briefs)")
 
         all_briefs = vlm_briefs + fallback_briefs
         if not all_briefs:
-            all_briefs = self._fallback_plan(image_types)
+            all_briefs = self._fallback_plan(image_types, sku_brief)
             console.print(f"  → 全 fallback: 生成 {len(all_briefs)} 个 creative briefs")
 
         return CreativeBriefSet(sku_id=sku_brief.sku_id, sku_brief=sku_brief, briefs=all_briefs)
@@ -175,18 +176,39 @@ class CreativeDirectorAgent:
         data = self._parse_json_array(response)
         return [CreativeBrief(**item) for item in data if "image_type" in item]
 
-    def _fallback_plan(self, image_types: list[str]) -> list[CreativeBrief]:
+    def _fallback_plan(self, image_types: list[str], sku_brief: SKUBrief | None = None) -> list[CreativeBrief]:
         briefs = []
         for it in image_types:
             if it == "hero_scene":
-                briefs.append(FALLBACK_BRIEFS["hero_scene"])
+                briefs.append(FALLBACK_BRIEFS["hero_scene"].model_copy(deep=True))
             elif it == "lifestyle_scene":
-                briefs.append(FALLBACK_BRIEFS["lifestyle_scene"])
+                briefs.append(FALLBACK_BRIEFS["lifestyle_scene"].model_copy(deep=True))
             elif it == "material_detail":
-                briefs.append(FALLBACK_BRIEFS["material_detail_plush"])
-                briefs.append(FALLBACK_BRIEFS["material_detail_sisal"])
-                briefs.append(FALLBACK_BRIEFS["material_detail_board"])
-                briefs.append(FALLBACK_BRIEFS["material_detail_scratching"])
+                briefs.append(FALLBACK_BRIEFS["material_detail_plush"].model_copy(deep=True))
+                briefs.append(FALLBACK_BRIEFS["material_detail_sisal"].model_copy(deep=True))
+                briefs.append(FALLBACK_BRIEFS["material_detail_board"].model_copy(deep=True))
+                briefs.append(FALLBACK_BRIEFS["material_detail_scratching"].model_copy(deep=True))
+        return self._apply_knowledge_to_briefs(briefs, sku_brief)
+
+    def _apply_knowledge_to_briefs(self, briefs: list[CreativeBrief], sku_brief: SKUBrief | None) -> list[CreativeBrief]:
+        if not sku_brief:
+            return briefs
+        context = sku_brief.knowledge_context or {}
+        for brief in briefs:
+            brief.knowledge_doc_ids = sku_brief.knowledge_doc_ids
+            brief.knowledge_rules_used = context.get("knowledge_rules_used", [])
+            brief.negative_prompts_used = context.get("negative_prompts_used", [])
+            brief.standard_assets_used = context.get("standard_asset_names", [])
+            brief.checklist_used = context.get("checklist_used", [])
+            for negative in (context.get("negative_prompts") or [])[:12]:
+                if negative not in brief.negative:
+                    brief.negative.append(negative)
+            if context.get("scene_rules") and brief.image_type in {"hero_scene", "lifestyle_scene"}:
+                brief.scene = f"{brief.scene}. Knowledge scene rules: {'; '.join(context['scene_rules'][:4])}"
+            if context.get("style_rules"):
+                brief.style = f"{brief.style}. Knowledge style rules: {'; '.join(context['style_rules'][:4])}"
+            if context.get("image_plan_templates"):
+                brief.visual_goal = f"{brief.visual_goal}. Follow applicable knowledge image plan templates where relevant."
         return briefs
 
     def _parse_json_array(self, text: str) -> list[dict]:

@@ -59,8 +59,22 @@ def _brief_to_prompt(brief: CreativeBrief, sku_brief: SKUBrief) -> str:
         parts.append(f"Focus on: {brief.material_focus} material in extreme closeup detail.")
 
     # Negative
-    if brief.negative:
-        parts.append(f"AVOID: {', '.join(brief.negative)}.")
+    negative = list(dict.fromkeys([*brief.negative, *brief.negative_prompts_used, *sku_brief.negative_prompts_used]))
+    if negative:
+        parts.append(f"AVOID: {', '.join(negative[:24])}.")
+
+    knowledge_context = sku_brief.knowledge_context or {}
+    global_rules = knowledge_context.get("global_rules", [])
+    scene_rules = knowledge_context.get("scene_rules", [])
+    style_rules = knowledge_context.get("style_rules", [])
+    if global_rules:
+        parts.append(f"Knowledge rules: {'; '.join(global_rules[:8])}.")
+    if scene_rules and brief.image_type in ("hero_scene", "lifestyle_scene"):
+        parts.append(f"Scene rules: {'; '.join(scene_rules[:8])}.")
+    if style_rules:
+        parts.append(f"Style rules: {'; '.join(style_rules[:8])}.")
+    if sku_brief.standard_assets_used:
+        parts.append(f"Use approved standard visual assets as context: {', '.join(sku_brief.standard_assets_used[:12])}.")
 
     # Commercial quality
     parts.append("Professional commercial e-commerce photography. Ultra high quality. 8K detail.")
@@ -108,12 +122,19 @@ class ImageGenerationAgent:
             if output_dir and record.status in ("generated", "text_only_candidate") and record.image_path == "":
                 # image_path set by generation methods when they have the image object
                 pass
+            self._attach_context(record, brief, sku_brief)
 
             candidates.append(record)
 
         success = sum(1 for c in candidates if c.status in ("generated", "text_only_candidate", "fallback"))
         console.print(f"    → {success}/{self.candidates_per_brief} candidates generated")
         return candidates
+
+    def _attach_context(self, record: CandidateRecord, brief: CreativeBrief, sku_brief: SKUBrief):
+        record.knowledge_doc_ids = list(dict.fromkeys([*sku_brief.knowledge_doc_ids, *brief.knowledge_doc_ids]))
+        record.knowledge_rules_used = list(dict.fromkeys([*sku_brief.knowledge_rules_used, *brief.knowledge_rules_used]))
+        record.negative_prompts_used = list(dict.fromkeys([*sku_brief.negative_prompts_used, *brief.negative_prompts_used]))
+        record.standard_assets_used = list(dict.fromkeys([*sku_brief.standard_assets_used, *brief.standard_assets_used]))
 
     def _generate_scene_candidate(
         self, cid: str, brief: CreativeBrief, prompt: str,

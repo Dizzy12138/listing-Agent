@@ -20,6 +20,10 @@ class CandidateRecord(BaseModel):
     status: str = "generated"  # generated / failed / fallback / text_only_candidate
     image_path: str = ""
     issues: list[str] = Field(default_factory=list)
+    knowledge_doc_ids: list[str] = Field(default_factory=list)
+    knowledge_rules_used: list[str] = Field(default_factory=list)
+    negative_prompts_used: list[str] = Field(default_factory=list)
+    standard_assets_used: list[str] = Field(default_factory=list)
 
 
 class QAScore(BaseModel):

@@ -77,6 +77,7 @@ class ExploreGenerationService:
         trace = TraceRecorder(run_id)
         knowledge_context = self._load_knowledge_context(knowledge_doc_ids)
         asset_context = self._load_asset_context(asset_pack_ids, asset_item_ids, inspiration_asset_ids)
+        knowledge_usage = self._build_knowledge_usage(knowledge_context, knowledge_doc_ids, asset_context)
         trace.add(
             step="context.load_knowledge_and_assets",
             status="warning" if knowledge_context["warnings"] or asset_context["excluded_unconfirmed_asset_item_ids"] or asset_context["missing_asset_item_ids"] else "success",
@@ -89,6 +90,8 @@ class ExploreGenerationService:
                 "standard_asset_ids": standard_asset_ids,
                 "knowledge_source": knowledge_context["knowledge_source"],
                 "knowledge_summary_used": knowledge_context["knowledge_summary_used"],
+                "knowledge_rules_used": knowledge_usage["knowledge_rules_used"],
+                "negative_prompts_used": knowledge_usage["negative_prompts_used"],
                 "standard_assets_used": [item["asset_item_id"] for item in asset_context["confirmed_items"]],
                 "confirmed_asset_item_ids": [item["asset_item_id"] for item in asset_context["confirmed_items"]],
                 "excluded_unconfirmed_asset_item_ids": asset_context["excluded_unconfirmed_asset_item_ids"],
@@ -114,8 +117,8 @@ class ExploreGenerationService:
         # ---- Step 2: SKU Brief ----
         self._progress(progress, "SKUBriefAgent: 商品身份提取", 10)
         brief_agent = SKUBriefAgent()
-        sku_brief = brief_agent.generate_brief(sku, product_image)
-        self._inject_context_into_sku_brief(sku_brief, knowledge_context, asset_context)
+        sku_brief = brief_agent.generate_brief(sku, product_image, knowledge_context=knowledge_usage)
+        self._inject_context_into_sku_brief(sku_brief, knowledge_context, asset_context, knowledge_usage)
         sku_brief_path = explore_dir / "sku_brief.json"
         sku_brief_path.write_text(sku_brief.model_dump_json(indent=2), encoding="utf-8")
         trace.add(step="sku_brief_agent", status="success",
@@ -126,6 +129,7 @@ class ExploreGenerationService:
         self._progress(progress, "CreativeDirector: 视觉方案规划", 15)
         director = CreativeDirectorAgent()
         brief_set = director.plan(sku_brief)
+        self._inject_context_into_creative_briefs(brief_set.briefs, knowledge_usage)
         briefs_path = explore_dir / "creative_briefs.json"
         briefs_path.write_text(brief_set.model_dump_json(indent=2), encoding="utf-8")
         trace.add(step="creative_director", status="success",
@@ -224,6 +228,9 @@ class ExploreGenerationService:
             "standard_asset_ids": standard_asset_ids,
             "knowledge_summary_used": knowledge_context["knowledge_summary_used"],
             "knowledge_source": knowledge_context["knowledge_source"],
+            "knowledge_rules_used": knowledge_usage["knowledge_rules_used"],
+            "negative_prompts_used": knowledge_usage["negative_prompts_used"],
+            "checklist_used": knowledge_usage["checklist_used"],
             "standard_assets_used": [item["asset_item_id"] for item in asset_context["confirmed_items"]],
             "confirmed_asset_item_ids": [item["asset_item_id"] for item in asset_context["confirmed_items"]],
             "excluded_unconfirmed_asset_item_ids": asset_context["excluded_unconfirmed_asset_item_ids"],
@@ -419,22 +426,118 @@ class ExploreGenerationService:
         context["confirmed_items"] = deduped
         return context
 
-    def _inject_context_into_sku_brief(self, sku_brief, knowledge_context: dict, asset_context: dict):
+    def _build_knowledge_usage(self, knowledge_context: dict, doc_ids: list[str], asset_context: dict) -> dict:
+        usage = {
+            "knowledge_doc_ids": doc_ids,
+            "category_path": "",
+            "global_rules": [],
+            "scene_rules": [],
+            "style_rules": [],
+            "negative_prompts": [],
+            "checklist": [],
+            "keyword_bank": [],
+            "replaceable_variables": [],
+            "image_plan_templates": [],
+            "knowledge_rules_used": [],
+            "negative_prompts_used": [],
+            "checklist_used": [],
+            "standard_asset_names": [item.get("name", "") for item in asset_context.get("confirmed_items", []) if item.get("name")],
+            "standard_assets_used": [item.get("asset_item_id", "") for item in asset_context.get("confirmed_items", []) if item.get("asset_item_id")],
+        }
         for doc in knowledge_context.get("docs", []):
             knowledge = doc.get("parsed_knowledge") or {}
-            for rule in (knowledge.get("global_rules") or [])[:6]:
-                if isinstance(rule, str) and rule not in sku_brief.must_show:
-                    sku_brief.must_show.append(rule)
-            for negative in (knowledge.get("negative_prompts") or [])[:8]:
-                if isinstance(negative, str) and negative not in sku_brief.sku_consistency_rules["strict"]:
-                    sku_brief.sku_consistency_rules["strict"].append(negative)
-            for keyword in (knowledge.get("keyword_bank") or [])[:12]:
+            if knowledge.get("category_path") and not usage["category_path"]:
+                usage["category_path"] = knowledge.get("category_path", "")
+            for field in [
+                "global_rules",
+                "scene_rules",
+                "style_rules",
+                "negative_prompts",
+                "checklist",
+                "keyword_bank",
+                "replaceable_variables",
+            ]:
+                usage[field].extend(self._enabled_rule_texts(knowledge.get(field) or []))
+            usage["image_plan_templates"].extend(knowledge.get("image_plan_templates") or [])
+        usage["global_rules"] = self._dedupe(usage["global_rules"])[:40]
+        usage["scene_rules"] = self._dedupe(usage["scene_rules"])[:40]
+        usage["style_rules"] = self._dedupe(usage["style_rules"])[:40]
+        usage["negative_prompts"] = self._dedupe(usage["negative_prompts"])[:40]
+        usage["checklist"] = self._dedupe(usage["checklist"])[:40]
+        usage["keyword_bank"] = self._dedupe(usage["keyword_bank"])[:60]
+        usage["replaceable_variables"] = self._dedupe(usage["replaceable_variables"])[:40]
+        usage["knowledge_rules_used"] = self._dedupe([*usage["global_rules"], *usage["scene_rules"], *usage["style_rules"]])[:80]
+        usage["negative_prompts_used"] = usage["negative_prompts"]
+        usage["checklist_used"] = usage["checklist"]
+        return usage
+
+    def _enabled_rule_texts(self, items: list) -> list[str]:
+        result = []
+        for item in items:
+            if isinstance(item, dict):
+                if item.get("enabled") is False:
+                    continue
+                text = item.get("text") or item.get("statement") or item.get("value") or item.get("name") or item.get("goal")
+            else:
+                text = item
+            if text:
+                result.append(str(text))
+        return result
+
+    def _dedupe(self, items: list[str]) -> list[str]:
+        result = []
+        seen = set()
+        for item in items:
+            key = item.strip()
+            if key and key not in seen:
+                seen.add(key)
+                result.append(key)
+        return result
+
+    def _inject_context_into_sku_brief(self, sku_brief, knowledge_context: dict, asset_context: dict, knowledge_usage: dict):
+        sku_brief.knowledge_doc_ids = knowledge_usage["knowledge_doc_ids"]
+        sku_brief.knowledge_context = knowledge_usage
+        sku_brief.knowledge_rules_used = knowledge_usage["knowledge_rules_used"]
+        sku_brief.negative_prompts_used = knowledge_usage["negative_prompts_used"]
+        sku_brief.standard_assets_used = knowledge_usage["standard_asset_names"]
+        if knowledge_usage.get("category_path") and knowledge_usage["category_path"] not in sku_brief.core_identity:
+            sku_brief.core_identity.append(f"category path: {knowledge_usage['category_path']}")
+        for variable in knowledge_usage.get("replaceable_variables", [])[:8]:
+            marker = f"replaceable variable: {variable}"
+            if marker not in sku_brief.must_show:
+                sku_brief.must_show.append(marker)
+        for doc in knowledge_context.get("docs", []):
+            knowledge = doc.get("parsed_knowledge") or {}
+            for keyword in self._enabled_rule_texts(knowledge.get("keyword_bank") or [])[:12]:
                 if isinstance(keyword, str) and keyword not in sku_brief.core_identity:
                     sku_brief.core_identity.append(keyword)
+        for rule in knowledge_usage["global_rules"][:8]:
+            if rule not in sku_brief.must_show:
+                sku_brief.must_show.append(rule)
+        for negative in knowledge_usage["negative_prompts"][:12]:
+            if negative not in sku_brief.sku_consistency_rules["strict"]:
+                sku_brief.sku_consistency_rules["strict"].append(negative)
         for item in asset_context.get("confirmed_items", [])[:20]:
             label = f"approved visual asset: {item.get('name')} ({item.get('group')})"
             if label not in sku_brief.core_identity:
                 sku_brief.core_identity.append(label)
+
+    def _inject_context_into_creative_briefs(self, briefs: list, knowledge_usage: dict):
+        for brief in briefs:
+            brief.knowledge_doc_ids = knowledge_usage["knowledge_doc_ids"]
+            brief.knowledge_rules_used = knowledge_usage["knowledge_rules_used"]
+            brief.negative_prompts_used = knowledge_usage["negative_prompts_used"]
+            brief.standard_assets_used = knowledge_usage["standard_asset_names"]
+            brief.checklist_used = knowledge_usage["checklist_used"]
+            for negative in knowledge_usage["negative_prompts"][:12]:
+                if negative not in brief.negative:
+                    brief.negative.append(negative)
+            if knowledge_usage["scene_rules"] and brief.image_type in ("hero_scene", "lifestyle_scene") and "Knowledge scene rules:" not in brief.scene:
+                brief.scene = f"{brief.scene}. Knowledge scene rules: {'; '.join(knowledge_usage['scene_rules'][:4])}"
+            if knowledge_usage["style_rules"] and "Knowledge style rules:" not in brief.style:
+                brief.style = f"{brief.style}. Knowledge style rules: {'; '.join(knowledge_usage['style_rules'][:4])}"
+            if knowledge_usage["image_plan_templates"] and "knowledge image plan templates" not in brief.visual_goal:
+                brief.visual_goal = f"{brief.visual_goal}. Follow applicable knowledge image plan templates where relevant."
 
     def _resize_candidate_images(self, candidates: list, size: str):
         try:
