@@ -121,6 +121,8 @@ def _status_for_parsed_items(pack: AssetPack, items: list[AssetItem]) -> str:
         return "needs_review"
     if not items:
         return "needs_review"
+    if any(item.source == "feandrea_mock" for item in items):
+        return "needs_review"
     if all(item.status == "needs_review" for item in items):
         return "needs_review"
     if all(item.source == "text_preview" for item in items):
@@ -315,17 +317,18 @@ def _extract_items_from_pdf(pack: AssetPack) -> list[AssetItem]:
                     print(f"  [AssetParse] 跳过图片: {e}")
                     continue
 
-    if pack.pack_type == "icon_pack_pdf" or "icon" in ",".join(pack.usage).lower() or "图标" in pack.name:
+    is_icon_pack = pack.pack_type == "icon_pack_pdf" or "icon" in ",".join(pack.usage).lower() or "图标" in pack.name
+    if is_icon_pack:
         sliced = _slice_icon_candidates_from_pages(pack, page_images, page_texts, start_index=img_index)
         extracted.extend(sliced)
         img_index += len(sliced)
 
-    if _should_use_feandrea_mock(pack, source, extracted):
+    if _should_use_feandrea_mock(pack, source, extracted, page_texts):
         mocked = _create_feandrea_mock_items(pack, start_index=img_index)
         extracted.extend(mocked)
         img_index += len(mocked)
 
-    if not extracted:
+    if not extracted and not is_icon_pack:
         print("  [AssetParse] 未识别到单独素材项，生成页面预览素材并标记 needs_review")
         for page_num, page_image in enumerate(page_images):
             text = page_texts[page_num] if page_num < len(page_texts) else ""
@@ -357,6 +360,12 @@ def _extract_items_from_pdf(pack: AssetPack) -> list[AssetItem]:
             )
             _items[item_id] = item
             extracted.append(item)
+
+    if is_icon_pack and _only_page_preview_items(extracted):
+        print("  [AssetParse] icon_pack_pdf 仅识别到整页素材，触发图标 fallback")
+        mocked = _create_feandrea_mock_items(pack, start_index=img_index)
+        extracted.extend(mocked)
+        img_index += len(mocked)
 
     print(f"  [AssetParse] 提取到 {len(extracted)} 个素材项")
 
@@ -611,10 +620,38 @@ def _name_from_page_text(text: str, group: str, index: int) -> str:
     return ""
 
 
-def _should_use_feandrea_mock(pack: AssetPack, source: Path, extracted: list[AssetItem]) -> bool:
+def _should_use_feandrea_mock(
+    pack: AssetPack,
+    source: Path,
+    extracted: list[AssetItem],
+    page_texts: list[str] | None = None,
+) -> bool:
     marker = f"{pack.name} {source.name}".lower()
-    looks_feandrea = any(k in marker for k in ["feandrea", "listing", "辅助图形", "图标"])
-    return looks_feandrea and len([it for it in extracted if it.source == "pdf_page_crop"]) < 12
+    page_text = "\n".join(page_texts or [])
+    looks_feandrea = any(k in marker for k in ["feandrea", "listing辅助图形", "图形汇总", "辅助图形"])
+    text_matches = any(k in page_text for k in ["猫树", "猫抓板", "防倾倒", "承重", "箭头"])
+    icon_candidates = [
+        it for it in extracted
+        if it.source == "pdf_page_crop" and it.item_type in {"icon", "arrow"} and not _is_page_preview_item(it)
+    ]
+    too_few_candidates = len(icon_candidates) < 10
+    page_preview_only = _only_page_preview_items(extracted)
+    return (looks_feandrea or text_matches or too_few_candidates or page_preview_only) and too_few_candidates
+
+
+def _only_page_preview_items(items: list[AssetItem]) -> bool:
+    return bool(items) and all(_is_page_preview_item(item) for item in items)
+
+
+def _is_page_preview_item(item: AssetItem) -> bool:
+    name = item.name or ""
+    tags = set(item.tags or [])
+    return (
+        item.source == "text_preview"
+        or "pdf_page" in tags
+        or name.startswith("页面_")
+        or item.item_type in {"background", "layout_reference"} and item.confidence < 0.5
+    )
 
 
 _FEANDREA_MOCK_GROUPS = {
@@ -658,8 +695,8 @@ def _create_feandrea_mock_items(pack: AssetPack, start_index: int = 0) -> list[A
                 applicable_categories=pack.category,
                 applicable_image_types=pack.usage,
                 status="needs_review",
-                confidence=0.35,
-                source="pdf_page_crop",
+                confidence=0.3,
+                source="feandrea_mock",
                 description="Feandrea icon PDF mock fallback item; requires human confirmation.",
                 created_at=_now(),
             )

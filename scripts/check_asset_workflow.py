@@ -39,6 +39,35 @@ def _fail(label: str, detail: Any):
     return False
 
 
+def _asset_items_quality(items: list[dict], pack_type: str = "icon_pack_pdf") -> tuple[bool, str]:
+    if pack_type == "icon_pack_pdf" and len(items) <= 2:
+        return False, f"icon pack returned only {len(items)} items"
+    required = {"group", "item_type", "status", "source", "preview_url", "applicable_categories", "transparent_png_url", "confidence"}
+    missing = [
+        item.get("asset_item_id") or item.get("name") or "<unknown>"
+        for item in items
+        if any(field not in item for field in required)
+    ]
+    if missing:
+        return False, f"items missing required fields: {missing[:5]}"
+    if any(item.get("status") == "available" for item in items):
+        return False, "found deprecated status=available"
+    page_like = [
+        item for item in items
+        if item.get("source") == "text_preview"
+        or "pdf_page" in (item.get("tags") or [])
+        or str(item.get("name", "")).startswith("页面_")
+    ]
+    if items and len(page_like) == len(items):
+        return False, "all items are page previews"
+    if pack_type == "icon_pack_pdf":
+        names = {str(item.get("name", "")) for item in items}
+        expected = {"猫树", "猫抓板", "防倾倒", "承重"}
+        if not expected.issubset(names) or not any("箭头" in name for name in names):
+            return False, f"missing expected Feandrea items; got sample={sorted(names)[:12]}"
+    return True, f"{len(items)} items"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check listing-Agent asset workflow APIs.")
     parser.add_argument("--base-url", default="", help="Optional live server base URL.")
@@ -102,11 +131,34 @@ def main() -> int:
                         "usage": "feature_icon",
                     },
                 )
-            if response.status_code == 200 and response.json().get("asset_pack_id"):
+            pack = response.json() if response.status_code == 200 else {}
+            pack_id = pack.get("asset_pack_id")
+            if response.status_code == 200 and pack_id:
                 _ok("asset pack upload")
                 checks.append(True)
             else:
                 checks.append(_fail("asset pack upload", f"HTTP {response.status_code}: {response.text[:200]}"))
+                pack_id = ""
+            if pack_id:
+                parse_response = request("POST", f"/api/asset-packs/{pack_id}/parse")
+                parsed_pack = parse_response.json() if parse_response.status_code == 200 else {}
+                if parse_response.status_code == 200 and parsed_pack.get("parse_status") in {"parsed", "needs_review"}:
+                    _ok("asset pack parse")
+                    checks.append(True)
+                else:
+                    checks.append(_fail("asset pack parse", f"HTTP {parse_response.status_code}: {parse_response.text[:200]}"))
+
+                items_response = request("GET", f"/api/asset-packs/{pack_id}/items")
+                items = items_response.json() if items_response.status_code == 200 else []
+                if items_response.status_code != 200:
+                    checks.append(_fail("asset items quality", f"HTTP {items_response.status_code}: {items_response.text[:200]}"))
+                else:
+                    ok, detail = _asset_items_quality(items, pack_type=pack.get("pack_type") or "icon_pack_pdf")
+                    if ok:
+                        _ok(f"asset items quality ({detail})")
+                        checks.append(True)
+                    else:
+                        checks.append(_fail("asset items quality", detail))
 
     if all(checks):
         print("PASS asset workflow self-check")
