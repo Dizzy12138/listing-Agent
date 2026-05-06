@@ -1,0 +1,15 @@
+services:
+  image-demo:
+    build: .
+    ports:
+      - "8090:8090"
+    env_file:
+      - .env
+    environment:
+      OUTPUT_DIR: /app/output
+    volumes:
+      - ./output:/app/output
+      - ./products/images:/app/products/images
+      - ./assets/uploads:/app/assets/uploads
+      - ./assets/docs:/app/assets/docs
+    restart: unless-stopped

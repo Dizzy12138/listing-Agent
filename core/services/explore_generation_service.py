@@ -54,8 +54,20 @@ class ExploreGenerationService:
         model: str | None = None,
         run_id: str | None = None,
         progress: ProgressCallback | None = None,
+        knowledge_doc_ids: list[str] | None = None,
+        asset_pack_ids: list[str] | None = None,
+        asset_item_ids: list[str] | None = None,
+        inspiration_asset_ids: list[str] | None = None,
+        standard_asset_ids: list[str] | None = None,
+        size: str = "2000x2000",
+        candidate_count: int = 4,
     ) -> dict:
         sku = self.sku_service.load(product_id)
+        knowledge_doc_ids = self._merge_ids(knowledge_doc_ids, getattr(sku, "knowledge_doc_ids", []))
+        asset_pack_ids = self._merge_ids(asset_pack_ids, getattr(sku, "asset_pack_ids", []))
+        standard_asset_ids = self._merge_ids(standard_asset_ids, getattr(sku, "standard_asset_item_ids", []))
+        inspiration_asset_ids = self._merge_ids(inspiration_asset_ids, getattr(sku, "inspiration_asset_ids", []))
+        asset_item_ids = self._merge_ids(asset_item_ids, standard_asset_ids)
         model = model or MODELS.get("image_primary", "gpt-image-2")
         run_id = run_id or f"explore_{product_id}_{datetime.now().strftime('%H%M%S')}"
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -63,6 +75,24 @@ class ExploreGenerationService:
         explore_dir = run_dir / "explore"
         explore_dir.mkdir(parents=True, exist_ok=True)
         trace = TraceRecorder(run_id)
+        knowledge_context = self._load_knowledge_context(knowledge_doc_ids)
+        asset_context = self._load_asset_context(asset_pack_ids, asset_item_ids, inspiration_asset_ids)
+        trace.add(
+            step="context.load_knowledge_and_assets",
+            status="warning" if knowledge_context["warnings"] or asset_context["excluded_unconfirmed_asset_item_ids"] else "success",
+            input={
+                "knowledge_doc_ids": knowledge_doc_ids,
+                "asset_pack_ids": asset_pack_ids,
+                "asset_item_ids": asset_item_ids,
+                "inspiration_asset_ids": inspiration_asset_ids,
+                "standard_asset_ids": standard_asset_ids,
+                "knowledge_source": knowledge_context["knowledge_source"],
+                "knowledge_summary_used": knowledge_context["knowledge_summary_used"],
+                "standard_assets_used": [item["asset_item_id"] for item in asset_context["confirmed_items"]],
+                "excluded_unconfirmed_asset_item_ids": asset_context["excluded_unconfirmed_asset_item_ids"],
+            },
+            issues=knowledge_context["warnings"],
+        )
 
         image_path = Path(product_image_path)
         product_image = Image.open(image_path).copy().convert("RGB")
@@ -82,6 +112,7 @@ class ExploreGenerationService:
         self._progress(progress, "SKUBriefAgent: 商品身份提取", 10)
         brief_agent = SKUBriefAgent()
         sku_brief = brief_agent.generate_brief(sku, product_image)
+        self._inject_context_into_sku_brief(sku_brief, knowledge_context, asset_context)
         sku_brief_path = explore_dir / "sku_brief.json"
         sku_brief_path.write_text(sku_brief.model_dump_json(indent=2), encoding="utf-8")
         trace.add(step="sku_brief_agent", status="success",
@@ -103,7 +134,7 @@ class ExploreGenerationService:
             console.print(f"    • {b.image_type} ({b.material_focus or 'main'}) — {b.visual_goal[:60]}...")
 
         # ---- Step 4: Multi-candidate generation ----
-        gen_agent = ImageGenerationAgent(model=model, candidates_per_brief=4)
+        gen_agent = ImageGenerationAgent(model=model, candidates_per_brief=max(1, min(int(candidate_count or 4), 8)))
         all_candidates = {}
         all_qa_input = {}
         total_briefs = len(brief_set.briefs)
@@ -119,6 +150,7 @@ class ExploreGenerationService:
                 white_bg_image=extracted["white_bg"],
                 output_dir=explore_dir,
             )
+            self._resize_candidate_images(candidates, size)
 
             # Save candidates
             type_key = self._type_key_for_brief(brief)
@@ -146,7 +178,15 @@ class ExploreGenerationService:
             trace.add(
                 step=f"image_gen.{type_key}",
                 status="success" if any(c.status != "failed" for c in candidates) else "warning",
-                input={"image_type": type_key, "candidates_generated": len(candidates)},
+                input={
+                    "image_type": type_key,
+                    "candidates_generated": len(candidates),
+                    "size": size,
+                    "knowledge_doc_ids": knowledge_doc_ids,
+                    "asset_pack_ids": asset_pack_ids,
+                    "asset_item_ids": asset_item_ids,
+                    "standard_assets_used": [item["asset_item_id"] for item in asset_context["confirmed_items"]],
+                },
                 issues=[c.issues[0] for c in candidates if c.issues],
             )
 
@@ -247,12 +287,155 @@ class ExploreGenerationService:
             "qa_summary": qa_summary.model_dump(),
             "creative_version": creative_version.model_dump() if creative_version else None,
             "artifacts": artifacts,
+            "context": {
+                "knowledge_doc_ids": knowledge_doc_ids,
+                "asset_pack_ids": asset_pack_ids,
+                "asset_item_ids": asset_item_ids,
+                "inspiration_asset_ids": inspiration_asset_ids,
+                "standard_asset_ids": standard_asset_ids,
+                "knowledge_summary_used": knowledge_context["knowledge_summary_used"],
+                "knowledge_source": knowledge_context["knowledge_source"],
+                "standard_assets_used": [item["asset_item_id"] for item in asset_context["confirmed_items"]],
+                "excluded_unconfirmed_asset_item_ids": asset_context["excluded_unconfirmed_asset_item_ids"],
+            },
             "traces": trace.records,
         }
 
     def _progress(self, callback: ProgressCallback | None, message: str, value: int):
         if callback:
             callback(message, value)
+
+    def _merge_ids(self, explicit: list[str] | None, bound: list[str] | None) -> list[str]:
+        result: list[str] = []
+        for value in [*(explicit or []), *(bound or [])]:
+            if value and value not in result:
+                result.append(value)
+        return result
+
+    def _load_knowledge_context(self, doc_ids: list[str]) -> dict:
+        context = {
+            "docs": [],
+            "knowledge_summary_used": "",
+            "knowledge_source": "none",
+            "warnings": [],
+        }
+        if not doc_ids:
+            return context
+        try:
+            from core.services.asset_service import analyze_doc, get_doc
+        except Exception as exc:
+            context["knowledge_source"] = "failed"
+            context["warnings"].append(f"knowledge_service_unavailable: {exc}")
+            return context
+
+        summaries = []
+        source_states = []
+        for doc_id in doc_ids:
+            doc = get_doc(doc_id)
+            if not doc:
+                context["warnings"].append(f"knowledge_doc_not_found: {doc_id}")
+                source_states.append("failed")
+                continue
+            if doc.parse_status != "parsed":
+                try:
+                    doc = analyze_doc(doc_id)
+                except Exception as exc:
+                    context["warnings"].append(f"knowledge_doc_parse_failed: {doc_id}: {exc}")
+            if doc.parse_status == "parsed" and doc.parsed_knowledge:
+                source_states.append("parsed")
+                knowledge = doc.parsed_knowledge
+                summaries.append(knowledge.get("summary") or doc.summary or doc.name)
+                context["docs"].append(doc.model_dump())
+            elif doc.parse_status == "failed":
+                source_states.append("failed")
+                context["warnings"].append(f"knowledge_doc_failed: {doc_id}: {doc.error or doc.status_message}")
+            else:
+                source_states.append("pending")
+                context["warnings"].append(f"knowledge_doc_pending: {doc_id}")
+        if "parsed" in source_states:
+            context["knowledge_source"] = "parsed"
+        elif "failed" in source_states:
+            context["knowledge_source"] = "failed"
+        elif source_states:
+            context["knowledge_source"] = "pending"
+        context["knowledge_summary_used"] = " / ".join(summaries)[:1200]
+        return context
+
+    def _load_asset_context(
+        self,
+        pack_ids: list[str],
+        item_ids: list[str],
+        inspiration_ids: list[str],
+    ) -> dict:
+        context = {
+            "packs": [],
+            "confirmed_items": [],
+            "inspiration_items": [],
+            "excluded_unconfirmed_asset_item_ids": [],
+        }
+        try:
+            from core.services.asset_service import get_item, get_pack, list_pack_items
+        except Exception:
+            return context
+        for pack_id in pack_ids:
+            pack = get_pack(pack_id)
+            if pack:
+                context["packs"].append(pack.model_dump())
+                for item in list_pack_items(pack_id):
+                    if item.get("status") == "confirmed" and item.get("asset_item_id") not in item_ids:
+                        context["confirmed_items"].append(item)
+        for item_id in item_ids:
+            item = get_item(item_id)
+            if not item:
+                continue
+            data = item.model_dump()
+            if item.status == "confirmed":
+                context["confirmed_items"].append(data)
+            else:
+                context["excluded_unconfirmed_asset_item_ids"].append(item_id)
+        for item_id in inspiration_ids:
+            item = get_item(item_id)
+            if item:
+                context["inspiration_items"].append(item.model_dump())
+        seen = set()
+        deduped = []
+        for item in context["confirmed_items"]:
+            iid = item.get("asset_item_id")
+            if iid in seen:
+                continue
+            seen.add(iid)
+            deduped.append(item)
+        context["confirmed_items"] = deduped
+        return context
+
+    def _inject_context_into_sku_brief(self, sku_brief, knowledge_context: dict, asset_context: dict):
+        for doc in knowledge_context.get("docs", []):
+            knowledge = doc.get("parsed_knowledge") or {}
+            for rule in (knowledge.get("global_rules") or [])[:6]:
+                if isinstance(rule, str) and rule not in sku_brief.must_show:
+                    sku_brief.must_show.append(rule)
+            for negative in (knowledge.get("negative_prompts") or [])[:8]:
+                if isinstance(negative, str) and negative not in sku_brief.sku_consistency_rules["strict"]:
+                    sku_brief.sku_consistency_rules["strict"].append(negative)
+            for keyword in (knowledge.get("keyword_bank") or [])[:12]:
+                if isinstance(keyword, str) and keyword not in sku_brief.core_identity:
+                    sku_brief.core_identity.append(keyword)
+        for item in asset_context.get("confirmed_items", [])[:20]:
+            label = f"approved visual asset: {item.get('name')} ({item.get('group')})"
+            if label not in sku_brief.core_identity:
+                sku_brief.core_identity.append(label)
+
+    def _resize_candidate_images(self, candidates: list, size: str):
+        try:
+            width, height = [int(part) for part in size.lower().split("x", 1)]
+        except Exception:
+            width, height = 2000, 2000
+        for candidate in candidates:
+            img = getattr(candidate, "_image", None)
+            if img is None:
+                continue
+            if img.size != (width, height):
+                candidate._image = img.resize((width, height), Image.LANCZOS)
 
     def _type_key_for_brief(self, brief) -> str:
         if not brief.material_focus:
