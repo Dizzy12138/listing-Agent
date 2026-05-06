@@ -22,7 +22,7 @@ function scoreFromQa(qa) {
 }
 
 function statusLabel(status) {
-    const map = { pending: '待解析', parsing: '解析中', parsed: '已解析', error: '失败' };
+    const map = { pending: '待解析', parsing: '解析中', parsed: '已解析', needs_review: '待复核', failed: '失败', error: '失败', auto_detected: '自动识别', confirmed: '已确认', disabled: '已禁用' };
     return map[status] || status || '-';
 }
 
@@ -174,13 +174,14 @@ async function renderImagePlan() {
 function imgCard(label, type, size, imgSrc, scores, badge) {
     const badgeHtml = badge ? `<div class="img-card-badge ${badge}">${badge === 'recommended' ? '推荐' : badge === 'candidate' ? '候选' : badge === 'failed' ? '失败' : '未开始'}</div>` : '';
     const bodyHtml = imgSrc ? `<img src="${imgSrc}" alt="${label}">${badgeHtml}` : `<div class="img-card-placeholder"><span class="icon">🖼</span>${size}</div>${badgeHtml}`;
+    const title = type ? `${label}｜${type}` : `${label}｜${size}`;
     const scoresHtml = scores ? `<div class="img-card-scores">
         <div class="score"><span class="score-label">商业</span><span class="score-val ${scoreClass(scores.c)}">${scores.c}</span></div>
         <div class="score"><span class="score-label">一致性</span><span class="score-val ${scoreClass(scores.k)}">${scores.k}</span></div>
         <div class="score"><span class="score-label">缺陷</span><span class="score-val ${scoreClass(scores.d)}">${scores.d}</span></div>
     </div>` : '';
     return `<div class="img-card">
-        <div class="img-card-head"><span class="img-card-title">${label}｜${type}</span><span class="img-card-size">${size}</span></div>
+        <div class="img-card-head"><span class="img-card-title">${title}</span><span class="img-card-size">${size}</span></div>
         <div class="img-card-body">${bodyHtml}</div>
         <div class="img-card-foot">${scoresHtml}
             <div class="img-card-actions">
@@ -318,12 +319,17 @@ async function renderRightPanel() {
     }
     // Load knowledge docs and find matching ones
     let docs = [];
-    try { const r = await fetch('/api/knowledge-docs'); docs = (await r.json()).docs || []; } catch {}
+    docs = await fetchJsonList('/api/knowledge-docs', 'docs');
     const parsed = docs.filter(d => d.parse_status === 'parsed');
     // Load asset packs
     let packs = [];
-    try { const r = await fetch('/api/asset-packs'); packs = (await r.json()).packs || []; } catch {}
+    packs = await fetchJsonList('/api/asset-packs', 'packs');
     const confirmedPacks = packs.filter(p => p.parse_status === 'parsed');
+    const confirmedItems = [];
+    for (const pack of confirmedPacks.slice(0, 4)) {
+        const items = await fetchJsonList(`/api/asset-packs/${pack.asset_pack_id}/items`, 'items');
+        confirmedItems.push(...items.filter(it => it.status === 'confirmed').slice(0, 8));
+    }
 
     // Knowledge section
     let knowledgeHtml = '';
@@ -349,7 +355,9 @@ async function renderRightPanel() {
     let assetsHtml = '';
     if (confirmedPacks.length) {
         assetsHtml = `<div class="ctx-section"><div class="ctx-section-title">🎨 素材包 (${confirmedPacks.length})</div>
-            ${confirmedPacks.map(p => `<div class="ctx-item"><span class="label">${p.name}</span><span class="ctx-tag">${p.item_count} 项</span></div>`).join('')}</div>`;
+            ${confirmedPacks.map(p => `<div class="ctx-item"><span class="label">${p.name}</span><span class="ctx-tag">${p.item_count} 项</span></div>`).join('')}
+            ${confirmedItems.length ? `<div class="ctx-item"><span class="label">已确认素材项</span>${confirmedItems.slice(0,12).map(it => '<span class="ctx-tag">'+escapeHtml(it.name)+' · '+escapeHtml(it.group||'其他')+'</span>').join('')}</div>` : '<div class="ctx-item"><span class="label">已确认素材项</span>暂无，未确认素材不会进入生图任务</div>'}
+        </div>`;
     } else {
         assetsHtml = `<div class="ctx-section"><div class="ctx-section-title">🎨 素材包</div>
             <div style="padding:16px;text-align:center;color:var(--text-muted);font-size:12px;">暂无素材包<br><a href="#" onclick="showPage('assets');return false;">去上传素材</a></div></div>`;
@@ -508,6 +516,7 @@ async function handleSkuAssetUpload(e) {
 async function handleTaskSubmit(e) {
     e.preventDefault();
     const fd = new FormData(e.target);
+    await appendWorkbenchContext(fd);
     try {
         const r = await fetch('/api/tasks', { method: 'POST', body: fd });
         const d = await r.json();
@@ -523,10 +532,41 @@ async function launchExplore() {
     try {
         const fd = new FormData();
         fd.append('product_id', currentSku.product_id);
+        await appendWorkbenchContext(fd);
         const r = await fetch('/api/explore-tasks', { method: 'POST', body: fd });
         const d = await r.json();
         toast(`Explore 任务 ${d.task_id} 已创建`, 'success');
     } catch (err) { toast('创建失败: ' + err.message, 'error'); }
+}
+
+async function appendWorkbenchContext(fd) {
+    const docs = await fetchJsonList('/api/knowledge-docs', 'docs');
+    const packs = await fetchJsonList('/api/asset-packs', 'packs');
+    const docIds = docs.filter(d => d.parse_status === 'parsed').map(d => d.doc_id);
+    const packIds = packs.filter(p => p.parse_status === 'parsed').map(p => p.asset_pack_id);
+    const confirmedItemIds = [];
+    for (const pack of packs.filter(p => p.parse_status === 'parsed')) {
+        const items = await fetchJsonList(`/api/asset-packs/${pack.asset_pack_id}/items`, 'items');
+        confirmedItemIds.push(...items.filter(it => it.status === 'confirmed').map(it => it.asset_item_id));
+    }
+    fd.append('knowledge_doc_ids', JSON.stringify(docIds));
+    fd.append('asset_pack_ids', JSON.stringify(packIds));
+    fd.append('asset_item_ids', JSON.stringify([...new Set(confirmedItemIds)]));
+    fd.append('standard_asset_ids', JSON.stringify([...new Set(confirmedItemIds)]));
+    if (!fd.has('size')) fd.append('size', '2000x2000');
+    if (!fd.has('candidate_count')) fd.append('candidate_count', '4');
+}
+
+async function fetchJsonList(url, key) {
+    try {
+        const r = await fetch(url);
+        if (!r.ok) return [];
+        const d = await r.json();
+        if (Array.isArray(d)) return d;
+        return d[key] || [];
+    } catch {
+        return [];
+    }
 }
 
 /* ===== Tasks Page ===== */
@@ -562,7 +602,7 @@ function renderTasks() {
 let assetPacks = [];
 async function renderAssets() {
     const area = document.getElementById('assetLibraryArea');
-    try { const r = await fetch('/api/asset-packs'); assetPacks = (await r.json()).packs || []; } catch { assetPacks = []; }
+    try { assetPacks = await fetchJsonList('/api/asset-packs', 'packs'); } catch { assetPacks = []; }
     area.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
         <div style="font-size:15px;font-weight:600">素材包管理</div>
         <div style="display:flex;gap:8px"><button class="btn btn-primary btn-sm" onclick="openModal('uploadPackModal')">📎 上传素材包</button></div>
@@ -571,10 +611,10 @@ async function renderAssets() {
     <table class="data-table"><thead><tr><th>素材包名称</th><th>类型</th><th>品类</th><th>页数</th><th>素材项</th><th>状态</th><th>操作</th></tr></thead><tbody>
     ${assetPacks.map(p => `<tr>
         <td><strong>${p.name}</strong></td>
-        <td><span class="tag tag-gray">${p.type}</span></td>
+        <td><span class="tag tag-gray">${p.pack_type || p.type}</span></td>
         <td>${(p.category||[]).map(c=>'<span class="tag tag-blue" style="margin:1px">'+c+'</span>').join('')}</td>
         <td>${p.page_count}</td><td>${p.item_count}</td>
-        <td><span class="tag ${p.parse_status==='parsed'?'tag-green':p.parse_status==='parsing'?'tag-blue':p.parse_status==='error'?'tag-red':'tag-yellow'}">${statusLabel(p.parse_status)}</span>${p.error?'<br><span class="inline-error">'+escapeHtml(p.error)+'</span>':''}</td>
+        <td><span class="tag ${p.parse_status==='parsed'?'tag-green':p.parse_status==='parsing'?'tag-blue':(p.parse_status==='failed'||p.parse_status==='error')?'tag-red':'tag-yellow'}">${statusLabel(p.parse_status)}</span>${p.error?'<br><span class="inline-error">'+escapeHtml(p.error)+'</span>':''}</td>
         <td><button class="btn btn-xs btn-secondary" onclick="viewPackItems('${p.asset_pack_id}')">查看素材项</button>
         ${p.parse_status!=='parsed'?'<button class="btn btn-xs btn-primary" onclick="triggerParse(\x27'+p.asset_pack_id+'\x27)">解析</button>':''}</td>
     </tr>`).join('')}
@@ -588,8 +628,7 @@ async function triggerParse(packId) {
     pollPackStatus(packId);
 }
 async function viewPackItems(packId) {
-    const r = await fetch('/api/asset-packs/'+packId+'/items');
-    const items = (await r.json()).items || [];
+    const items = await fetchJsonList('/api/asset-packs/'+packId+'/items', 'items');
     const area = document.getElementById('packItemsArea');
     area.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
         <div style="font-size:14px;font-weight:600">素材项 (${items.length})</div>
@@ -599,20 +638,20 @@ async function viewPackItems(packId) {
         </div>
     </div>
     <div class="asset-grid">${items.map(it => `<div class="asset-thumb" data-item-id="${it.asset_item_id}" onclick="this.classList.toggle('selected')" style="border:2px solid ${it.status==='confirmed'?'var(--success)':it.status==='disabled'?'var(--danger)':'var(--border)'}">
-        <div class="asset-thumb-img">${it.preview_url ? '<img src="'+it.preview_url+'" style="width:100%;height:100%;object-fit:contain;">' : (it.type==='icon'?'🏷':'🎨')}</div>
-        <div class="asset-thumb-label"><strong>${it.name}</strong><br><span style="font-size:10px;color:var(--text-muted)">${(it.tags||[]).join(', ')}</span><br><span class="tag ${it.status==='confirmed'?'tag-green':it.status==='disabled'?'tag-red':'tag-yellow'}" style="margin-top:2px">${it.status}</span></div>
+        <div class="asset-thumb-img">${it.preview_url ? '<img src="'+it.preview_url+'" style="width:100%;height:100%;object-fit:contain;">' : ((it.item_type||it.type)==='icon'?'🏷':'🎨')}</div>
+        <div class="asset-thumb-label"><strong>${escapeHtml(it.name)}</strong><br><span style="font-size:10px;color:var(--text-muted)">${escapeHtml(it.group || '其他')} · ${escapeHtml(it.item_type || it.type || '')}</span><br><span style="font-size:10px;color:var(--text-muted)">${(it.tags||[]).map(escapeHtml).join(', ')}</span><br><span class="tag ${it.status==='confirmed'?'tag-green':it.status==='disabled'?'tag-red':'tag-yellow'}" style="margin-top:2px">${statusLabel(it.status)}</span></div>
     </div>`).join('')}</div>`;
 }
 async function batchConfirmItems(packId) {
     const ids = [...document.querySelectorAll('#packItemsArea .asset-thumb.selected')].map(e=>e.dataset.itemId).filter(Boolean);
     if(!ids.length){toast('请先点击选择素材项','info');return;}
-    await fetch('/api/asset-items/batch-confirm',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({asset_item_ids:ids,status:'confirmed'})});
+    await fetch('/api/asset-items/batch-confirm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({asset_item_ids:ids,status:'confirmed'})});
     toast(`已确认 ${ids.length} 个素材项`,'success'); viewPackItems(packId);
 }
 async function batchDisableItems(packId) {
     const ids = [...document.querySelectorAll('#packItemsArea .asset-thumb.selected')].map(e=>e.dataset.itemId).filter(Boolean);
     if(!ids.length){toast('请先点击选择素材项','info');return;}
-    await fetch('/api/asset-items/batch-disable',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({asset_item_ids:ids})});
+    await fetch('/api/asset-items/batch-disable',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({asset_item_ids:ids,status:'disabled'})});
     toast(`已禁用 ${ids.length} 个素材项`,'success'); viewPackItems(packId);
 }
 async function handlePackUpload(e) {
@@ -645,16 +684,17 @@ async function handlePackUpload(e) {
         const d = JSON.parse(result);
         uploadOps[opId].phase = '解析中';
         uploadOps[opId].pct = 100;
-        uploadOps[opId].packId = d.pack.asset_pack_id;
+        const packId = d.asset_pack_id || d.pack?.asset_pack_id;
+        uploadOps[opId].packId = packId;
         btn.innerHTML = '解析中...';
         toast('素材包上传成功，开始解析...','success');
-        await fetch('/api/asset-packs/'+d.pack.asset_pack_id+'/parse',{method:'POST'});
+        await fetch('/api/asset-packs/'+packId+'/parse',{method:'POST'});
         closeModal('uploadPackModal');
         form.reset();
         clearUploadSelection(form);
         btn.disabled = false;
         btn.innerHTML = origText;
-        pollPackStatus(d.pack.asset_pack_id, 40, opId);
+        pollPackStatus(packId, 40, opId);
     } catch(err) {
         toast('上传失败: '+err.message,'error');
         btn.disabled = false;
@@ -703,13 +743,13 @@ function pollPackStatus(packId, maxRetries = 40, opId = 'asset:' + packId) {
             uploadOps[opId] = uploadOps[opId] || { scope: 'asset', name: p.name || packId, status: 'running' };
             uploadOps[opId].name = p.name || uploadOps[opId].name;
             uploadOps[opId].phase = statusLabel(p.parse_status);
-            uploadOps[opId].pct = p.parse_status === 'parsed' ? 100 : p.parse_status === 'error' ? 100 : Math.min(95, 55 + retries * 3);
-            uploadOps[opId].status = p.parse_status === 'error' ? 'error' : p.parse_status === 'parsed' ? 'done' : 'running';
-            if (p.parse_status === 'parsed' || p.parse_status === 'error' || retries >= maxRetries) {
+            uploadOps[opId].pct = p.parse_status === 'parsed' ? 100 : (p.parse_status === 'failed' || p.parse_status === 'error') ? 100 : Math.min(95, 55 + retries * 3);
+            uploadOps[opId].status = (p.parse_status === 'failed' || p.parse_status === 'error') ? 'error' : p.parse_status === 'parsed' ? 'done' : 'running';
+            if (p.parse_status === 'parsed' || p.parse_status === 'failed' || p.parse_status === 'error' || retries >= maxRetries) {
                 clearInterval(interval);
                 renderAssets();
                 if (p.parse_status === 'parsed') toast(`解析完成：${p.item_count} 个素材项`, 'success');
-                else if (p.parse_status === 'error') toast('解析失败: ' + (p.error||''), 'error');
+                else if (p.parse_status === 'failed' || p.parse_status === 'error') toast('解析失败: ' + (p.error||''), 'error');
             } else {
                 renderAssets();
             }
@@ -736,7 +776,7 @@ function renderKb() {
 
 let kbDocs = [];
 async function renderKbCategory(el) {
-    try { const r = await fetch('/api/knowledge-docs'); kbDocs = (await r.json()).docs || []; } catch { kbDocs = []; }
+    try { kbDocs = await fetchJsonList('/api/knowledge-docs', 'docs'); } catch { kbDocs = []; }
     el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
         <div style="font-size:15px;font-weight:600;">品类知识库</div>
         <button class="btn btn-primary btn-sm" onclick="openModal('uploadDocModal')">📄 上传文档</button>
@@ -749,7 +789,7 @@ async function renderKbCategory(el) {
         <td><strong>${d.name}</strong>${d.name_en?'<br><span style="font-size:11px;color:var(--text-muted)">'+d.name_en+'</span>':''}</td>
         <td>${(d.category||[]).map(c=>'<span class="tag tag-blue">'+c+'</span>').join(' ')}</td>
         <td>${(d.upload_time||'').slice(0,10)}</td>
-        <td><span class="tag ${d.parse_status==='parsed'?'tag-green':d.parse_status==='parsing'?'tag-blue':d.parse_status==='error'?'tag-red':'tag-yellow'}">${statusLabel(d.parse_status)}</span>
+        <td><span class="tag ${d.parse_status==='parsed'?'tag-green':d.parse_status==='parsing'?'tag-blue':(d.parse_status==='failed'||d.parse_status==='error')?'tag-red':'tag-yellow'}">${statusLabel(d.parse_status)}</span>
             ${docParseModeBadge(d)}
             ${d.error?'<br><span class="inline-error">'+escapeHtml(d.error)+'</span>':''}</td>
         <td>${d.rule_count||'-'}</td><td>${d.checklist_count||'-'}</td><td>${d.linked_sku_count||0}</td>
@@ -782,7 +822,7 @@ function renderKbInspiration(el) {
 
 async function renderKbStandard(el) {
     let packs = [];
-    try { const r = await fetch('/api/asset-packs'); packs = (await r.json()).packs || []; } catch {}
+    try { packs = await fetchJsonList('/api/asset-packs', 'packs'); } catch {}
     if (!packs.length) {
         el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
             <div style="font-size:15px;font-weight:600;">标准素材库</div>
@@ -796,7 +836,7 @@ async function renderKbStandard(el) {
         <button class="btn btn-primary btn-sm" onclick="showPage('assets')">📎 管理素材包</button>
     </div>
     <table class="data-table"><thead><tr><th>素材包</th><th>类型</th><th>素材项</th><th>状态</th></tr></thead><tbody>
-    ${packs.map(p => `<tr><td><strong>${p.name}</strong></td><td><span class="tag tag-gray">${p.type||'pdf'}</span></td><td>${p.item_count}</td>
+    ${packs.map(p => `<tr><td><strong>${p.name}</strong></td><td><span class="tag tag-gray">${p.pack_type||p.type||'pdf'}</span></td><td>${p.item_count}</td>
         <td><span class="tag ${p.parse_status==='parsed'?'tag-green':'tag-yellow'}">${p.parse_status==='parsed'?'已解析':'待解析'}</span></td></tr>`).join('')}
     </tbody></table>`;
 }
@@ -847,20 +887,35 @@ async function analyzeDoc(docId) {
     pollDocStatus(docId);
 }
 async function viewDocSummary(docId) {
-    const r = await fetch('/api/knowledge-docs/'+docId+'/summary');
+    const r = await fetch('/api/knowledge-docs/'+docId);
     const d = await r.json();
-    const k = d.knowledge || {};
+    const k = d.parsed_knowledge || {};
     const area = document.getElementById('docSummaryArea');
-    area.innerHTML = `<div class="settings-card"><h3>📋 ${d.summary||docId}</h3>
+    area.innerHTML = `<div class="settings-card"><h3>📋 ${d.summary||d.name||docId}</h3>
         <div class="ctx-item"><span class="label">解析模式</span>${k.parse_mode === 'llm_chunked' ? 'LLM 分块提取' : k.parse_mode === 'local_heuristic_fallback' ? '本地兜底（LLM 未成功）' : (k.parse_mode || '-')}</div>
         ${k.llm_model ? `<div class="ctx-item"><span class="label">LLM 模型</span>${escapeHtml(k.llm_model)}</div>` : ''}
         ${k.fallback_reason ? `<div class="ctx-item"><span class="label">兜底原因</span><span class="inline-error">${escapeHtml(k.fallback_reason)}</span></div>` : ''}
-        <div class="ctx-item"><span class="label">品类路径</span>${k.category_path||'-'}</div>
-        <div class="ctx-item"><span class="label">全局规则</span>${(k.global_rules||[]).map(r=>'<div>• '+r+'</div>').join('')}</div>
-        <div class="ctx-item"><span class="label">场景规则</span>${(k.scene_rules||[]).map(r=>'<div>• '+r+'</div>').join('')}</div>
-        <div class="ctx-item"><span class="label">负面提示词</span>${(k.negative_prompts||[]).map(r=>'<span class="ctx-tag">'+r+'</span>').join('')}</div>
-        <div class="ctx-item"><span class="label">检查清单</span><ul class="ctx-checklist">${(k.checklist||[]).map(c=>'<li>'+c+'</li>').join('')}</ul></div>
+        <div class="ctx-item"><span class="label">品类路径</span>${escapeHtml(k.category_path||d.category_path||'-')}</div>
+        <div class="ctx-item"><span class="label">全局规则</span>${renderKnowledgeList(k.global_rules)}</div>
+        <div class="ctx-item"><span class="label">图片模板</span>${renderKnowledgeObjects(k.image_plan_templates)}</div>
+        <div class="ctx-item"><span class="label">Prompt 模板</span>${renderKnowledgeList(k.prompt_templates)}</div>
+        <div class="ctx-item"><span class="label">场景规则</span>${renderKnowledgeList(k.scene_rules)}</div>
+        <div class="ctx-item"><span class="label">风格规则</span>${renderKnowledgeList(k.style_rules)}</div>
+        <div class="ctx-item"><span class="label">负面提示词</span>${(k.negative_prompts||[]).map(r=>'<span class="ctx-tag">'+escapeHtml(r)+'</span>').join('')}</div>
+        <div class="ctx-item"><span class="label">检查清单</span><ul class="ctx-checklist">${(k.checklist||[]).map(c=>'<li>'+escapeHtml(c)+'</li>').join('')}</ul></div>
+        <div class="ctx-item"><span class="label">关键词库</span>${(k.keyword_bank||[]).map(r=>'<span class="ctx-tag">'+escapeHtml(r)+'</span>').join('')}</div>
     </div>`;
+}
+
+function renderKnowledgeList(items) {
+    return (items || []).map(r => '<div>• ' + escapeHtml(r) + '</div>').join('') || '-';
+}
+
+function renderKnowledgeObjects(items) {
+    return (items || []).map(item => {
+        if (typeof item === 'string') return '<div>• ' + escapeHtml(item) + '</div>';
+        return `<div>• ${escapeHtml(item.name || item.type || 'template')}：${escapeHtml(item.goal || '')}</div>`;
+    }).join('') || '-';
 }
 async function handleDocUpload(e) {
     e.preventDefault();
@@ -885,16 +940,17 @@ async function handleDocUpload(e) {
         const d = JSON.parse(result);
         uploadOps[opId].phase = '解析中';
         uploadOps[opId].pct = 100;
-        uploadOps[opId].docId = d.doc.doc_id;
+        const docId = d.doc_id || d.doc?.doc_id;
+        uploadOps[opId].docId = docId;
         btn.innerHTML = '解析中...';
         toast('文档上传成功，开始解析...','success');
-        await fetch('/api/knowledge-docs/'+d.doc.doc_id+'/analyze',{method:'POST'});
+        await fetch('/api/knowledge-docs/'+docId+'/analyze',{method:'POST'});
         closeModal('uploadDocModal');
         form.reset();
         clearUploadSelection(form);
         btn.disabled = false;
         btn.innerHTML = origText;
-        pollDocStatus(d.doc.doc_id, 40, opId);
+        pollDocStatus(docId, 40, opId);
     } catch(err) {
         toast('上传失败: '+err.message,'error');
         btn.disabled = false;
@@ -913,13 +969,13 @@ function pollDocStatus(docId, maxRetries = 40, opId = 'knowledge:' + docId) {
             uploadOps[opId] = uploadOps[opId] || { scope: 'knowledge', name: d.name || docId, status: 'running' };
             uploadOps[opId].name = d.name || uploadOps[opId].name;
             uploadOps[opId].phase = statusLabel(d.parse_status);
-            uploadOps[opId].pct = d.parse_status === 'parsed' ? 100 : d.parse_status === 'error' ? 100 : Math.min(95, 55 + retries * 3);
-            uploadOps[opId].status = d.parse_status === 'error' ? 'error' : d.parse_status === 'parsed' ? 'done' : 'running';
-            if (d.parse_status === 'parsed' || d.parse_status === 'error' || retries >= maxRetries) {
+            uploadOps[opId].pct = d.parse_status === 'parsed' ? 100 : (d.parse_status === 'failed' || d.parse_status === 'error') ? 100 : Math.min(95, 55 + retries * 3);
+            uploadOps[opId].status = (d.parse_status === 'failed' || d.parse_status === 'error') ? 'error' : d.parse_status === 'parsed' ? 'done' : 'running';
+            if (d.parse_status === 'parsed' || d.parse_status === 'failed' || d.parse_status === 'error' || retries >= maxRetries) {
                 clearInterval(interval);
                 renderKb();
                 if (d.parse_status === 'parsed') toast(`解析完成：${d.rule_count} 条规则，${d.checklist_count} 条检查项`, 'success');
-                else if (d.parse_status === 'error') toast('解析失败', 'error');
+                else if (d.parse_status === 'failed' || d.parse_status === 'error') toast('解析失败', 'error');
             } else {
                 renderKb();
             }

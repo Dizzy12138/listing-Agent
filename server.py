@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from config import OUTPUT_DIR, PRODUCTS_DIR
 from agents.visual_runtime import VisualAgentRuntime
+from core.services import asset_service
 from core.services.creative_service import CreativeService
 
 app = FastAPI(title="电商批量生图平台", version="1.0.0")
@@ -52,6 +53,10 @@ class ProductConfig(BaseModel):
     image_plan: list[dict] = Field(default_factory=list)
     competitors: list[str] = Field(default_factory=list)
     internal_refs: list[str] = Field(default_factory=list)
+    knowledge_doc_ids: list[str] = Field(default_factory=list)
+    asset_pack_ids: list[str] = Field(default_factory=list)
+    standard_asset_item_ids: list[str] = Field(default_factory=list)
+    inspiration_asset_ids: list[str] = Field(default_factory=list)
 
 
 class TaskStatus(BaseModel):
@@ -132,6 +137,22 @@ class KnowledgeRuleCreate(BaseModel):
 @app.get("/")
 async def index():
     return FileResponse("static/index.html")
+
+
+@app.get("/api/health")
+async def health_check():
+    """Lightweight readiness endpoint for deployment probes and monitors."""
+    return {
+        "status": "ok",
+        "service": "sku-visual-agent-platform",
+        "version": app.version,
+        "storage": {
+            "products_dir": str(PRODUCTS_DIR),
+            "products_dir_exists": PRODUCTS_DIR.exists(),
+            "output_dir": str(OUTPUT_DIR),
+            "output_dir_exists": OUTPUT_DIR.exists(),
+        },
+    }
 
 
 @app.get("/api/products")
@@ -279,18 +300,55 @@ async def create_task(
     model: str = Form("gpt-image-2"),
     scene_count: int = Form(3),
     mode: str = Form("explore"),
+    knowledge_doc_ids: str = Form(""),
+    asset_pack_ids: str = Form(""),
+    asset_item_ids: str = Form(""),
+    inspiration_asset_ids: str = Form(""),
+    standard_asset_ids: str = Form(""),
+    size: str = Form("2000x2000"),
+    candidate_count: int = Form(4),
 ):
     """创建生图任务（支持 explore / batch 模式）"""
-    return _create_generation_task(product_id=product_id, model=model, scene_count=scene_count, mode=mode)
+    return _create_generation_task(
+        product_id=product_id,
+        model=model,
+        scene_count=scene_count,
+        mode=mode,
+        knowledge_doc_ids=_parse_id_list(knowledge_doc_ids),
+        asset_pack_ids=_parse_id_list(asset_pack_ids),
+        asset_item_ids=_parse_id_list(asset_item_ids),
+        inspiration_asset_ids=_parse_id_list(inspiration_asset_ids),
+        standard_asset_ids=_parse_id_list(standard_asset_ids),
+        size=size,
+        candidate_count=candidate_count,
+    )
 
 
 @app.post("/api/explore-tasks")
 async def create_explore_task(
     product_id: str = Form(...),
     model: str = Form("gpt-image-2"),
+    knowledge_doc_ids: str = Form(""),
+    asset_pack_ids: str = Form(""),
+    asset_item_ids: str = Form(""),
+    inspiration_asset_ids: str = Form(""),
+    standard_asset_ids: str = Form(""),
+    size: str = Form("2000x2000"),
+    candidate_count: int = Form(4),
 ):
     """创建 Explore 候选生成任务"""
-    return _create_generation_task(product_id=product_id, model=model, mode="explore")
+    return _create_generation_task(
+        product_id=product_id,
+        model=model,
+        mode="explore",
+        knowledge_doc_ids=_parse_id_list(knowledge_doc_ids),
+        asset_pack_ids=_parse_id_list(asset_pack_ids),
+        asset_item_ids=_parse_id_list(asset_item_ids),
+        inspiration_asset_ids=_parse_id_list(inspiration_asset_ids),
+        standard_asset_ids=_parse_id_list(standard_asset_ids),
+        size=size,
+        candidate_count=candidate_count,
+    )
 
 
 
@@ -431,7 +489,19 @@ async def create_rule(body: KnowledgeRuleCreate):
     return rule.model_dump()
 
 
-def _create_generation_task(product_id: str, model: str = "gpt-image-2", scene_count: int = 3, mode: str = "explore"):
+def _create_generation_task(
+    product_id: str,
+    model: str = "gpt-image-2",
+    scene_count: int = 3,
+    mode: str = "explore",
+    knowledge_doc_ids: list[str] | None = None,
+    asset_pack_ids: list[str] | None = None,
+    asset_item_ids: list[str] | None = None,
+    inspiration_asset_ids: list[str] | None = None,
+    standard_asset_ids: list[str] | None = None,
+    size: str = "2000x2000",
+    candidate_count: int = 4,
+):
     """创建并启动生图任务，可由 API 或 Agent Run 复用。"""
     # 检查产品配置
     prod_path = PRODUCTS_DIR / f"{product_id.lower()}.json"
@@ -464,6 +534,13 @@ def _create_generation_task(product_id: str, model: str = "gpt-image-2", scene_c
     tasks[task_id]["scene_count"] = scene_count
     tasks[task_id]["image_path"] = str(img_path)
     tasks[task_id]["mode"] = mode
+    tasks[task_id]["knowledge_doc_ids"] = knowledge_doc_ids or []
+    tasks[task_id]["asset_pack_ids"] = asset_pack_ids or []
+    tasks[task_id]["asset_item_ids"] = asset_item_ids or []
+    tasks[task_id]["inspiration_asset_ids"] = inspiration_asset_ids or []
+    tasks[task_id]["standard_asset_ids"] = standard_asset_ids or []
+    tasks[task_id]["size"] = size
+    tasks[task_id]["candidate_count"] = candidate_count
 
     # 后台执行 Pipeline
     import threading
@@ -472,10 +549,94 @@ def _create_generation_task(product_id: str, model: str = "gpt-image-2", scene_c
     return {"task_id": task_id, "status": "created", "mode": mode}
 
 
+def _parse_id_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        raw = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+            raw = parsed if isinstance(parsed, list) else [parsed]
+        except json.JSONDecodeError:
+            raw = text.split(",")
+    result = []
+    for item in raw:
+        item = str(item).strip()
+        if item and item not in result:
+            result.append(item)
+    return result
+
+
+def _parse_string_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value).strip()
+    if not text:
+        return []
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item).strip()]
+    except json.JSONDecodeError:
+        pass
+    return [item.strip() for item in text.split(",") if item.strip()]
+
+
 def _update_task(task_id: str, **kwargs):
     """更新任务状态"""
     if task_id in tasks:
         tasks[task_id].update(kwargs)
+
+
+def _task_context_payload(task: dict) -> dict:
+    return {
+        "knowledge_doc_ids": task.get("knowledge_doc_ids", []),
+        "asset_pack_ids": task.get("asset_pack_ids", []),
+        "asset_item_ids": task.get("asset_item_ids", []),
+        "inspiration_asset_ids": task.get("inspiration_asset_ids", []),
+        "standard_asset_ids": task.get("standard_asset_ids", []),
+        "size": task.get("size", "2000x2000"),
+        "candidate_count": task.get("candidate_count", 4),
+    }
+
+
+def _append_task_context_trace(result: dict, task: dict):
+    """Record knowledge/asset context for batch runs without changing workflow internals."""
+    payload = _task_context_payload(task)
+    record = {
+        "run_id": result.get("run_id"),
+        "step": "context.load_knowledge_and_assets",
+        "status": "success",
+        "input": {
+            **payload,
+            "knowledge_used": bool(payload["knowledge_doc_ids"]),
+            "asset_packs_used": bool(payload["asset_pack_ids"]),
+            "asset_items_used": bool(payload["asset_item_ids"] or payload["standard_asset_ids"]),
+            "excluded_unconfirmed_asset_item_ids": [],
+        },
+        "model": None,
+        "output_artifact": None,
+        "cost": None,
+        "duration_ms": None,
+        "issues": [],
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    }
+    result.setdefault("traces", []).append(record)
+    output_dir = Path(result.get("output_dir", ""))
+    trace_path = output_dir / "trace.json"
+    if trace_path.exists():
+        try:
+            existing = json.loads(trace_path.read_text(encoding="utf-8"))
+            existing.append(record)
+            trace_path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
 
 
 def _run_task_real(task_id: str):
@@ -501,6 +662,13 @@ def _run_task_real(task_id: str):
                 model=model,
                 run_id=f"task_{task_id}",
                 progress=progress,
+                knowledge_doc_ids=task.get("knowledge_doc_ids", []),
+                asset_pack_ids=task.get("asset_pack_ids", []),
+                asset_item_ids=task.get("asset_item_ids", []),
+                inspiration_asset_ids=task.get("inspiration_asset_ids", []),
+                standard_asset_ids=task.get("standard_asset_ids", []),
+                size=task.get("size", "2000x2000"),
+                candidate_count=int(task.get("candidate_count", 4)),
             )
             explore_dir = Path(result.get("explore_dir", ""))
 
@@ -528,6 +696,7 @@ def _run_task_real(task_id: str):
                 qa_summary=result.get("qa_summary", {}),
                 creative_briefs=[b for b in result.get("creative_briefs", [])],
                 traces=result.get("traces", []),
+                context=result.get("context", {}),
                 mode="explore",
             )
 
@@ -542,6 +711,7 @@ def _run_task_real(task_id: str):
                 run_id=f"task_{task_id}",
                 progress=progress,
             )
+            _append_task_context_trace(result, task)
             out_dir = Path(result["output_dir"])
             for artifact in result["artifacts"]:
                 path = Path(artifact["path"])
@@ -563,6 +733,7 @@ def _run_task_real(task_id: str):
                 images=generated_images,
                 jobs=result["jobs"],
                 traces=result["traces"],
+                context=_task_context_payload(task),
                 creative_version=result.get("creative_version"),
                 mode="batch",
             )
@@ -1035,36 +1206,40 @@ async def review_candidate(task_id: str, candidate_id: str, body: dict):
 
 @app.get("/api/asset-packs")
 async def api_list_packs():
-    from core.services.asset_service import list_packs
-    return {"packs": list_packs()}
+    return asset_service.list_packs()
 
 
 @app.get("/api/asset-packs/{pack_id}")
 async def api_get_pack(pack_id: str):
-    from core.services.asset_service import get_pack
-    pack = get_pack(pack_id)
+    pack = asset_service.get_pack(pack_id)
     if not pack:
         raise HTTPException(404, "素材包不存在")
     return pack.model_dump()
 
 @app.post("/api/asset-packs/upload")
 async def api_upload_pack(
-    file: list[UploadFile] = File(...),
+    file: list[UploadFile] | None = File(None),
+    files: list[UploadFile] | None = File(None),
     name: str = Form(""),
+    pack_type: str = Form("icon_pack_pdf"),
     category: str = Form("Pet Supplies,Cat Furniture"),
     usage: str = Form("listing_info_graph,feature_icon"),
 ):
     """Upload asset pack files (PDF, PNG, JPG, etc.) and save."""
-    from core.services.asset_service import create_pack
-
-    upload_dir = Path("assets/uploads")
+    upload_dir = Path("assets/uploads/packs")
     upload_dir.mkdir(parents=True, exist_ok=True)
 
     saved_files = []
     file_types = set()
-    for f in file:
+    upload_files = [*(file or []), *(files or [])]
+    if not upload_files:
+        raise HTTPException(400, "请上传素材包文件")
+    allowed = {".pdf", ".zip", ".png", ".jpg", ".jpeg", ".webp", ".svg"}
+    for f in upload_files:
         fname = f.filename or "upload"
         ext = Path(fname).suffix.lower()
+        if ext not in allowed:
+            raise HTTPException(400, f"不支持的素材文件类型: {ext}")
         dest = upload_dir / f"{uuid.uuid4().hex[:8]}_{fname}"
         with open(dest, "wb") as out:
             content = await f.read()
@@ -1072,59 +1247,100 @@ async def api_upload_pack(
         saved_files.append(str(dest))
         if ext == ".pdf":
             file_types.add("pdf")
+        elif ext == ".zip":
+            file_types.add("zip")
         elif ext in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".svg"):
             file_types.add("image")
         else:
             file_types.add("other")
 
-    # Determine pack type
-    if "pdf" in file_types:
+    if len(file_types) > 1:
+        ftype = "mixed"
+    elif "pdf" in file_types:
         ftype = "pdf"
+    elif "zip" in file_types:
+        ftype = "zip"
     elif "image" in file_types:
         ftype = "image"
     else:
-        ftype = "other"
+        ftype = "mixed"
 
     pack_name = name or Path(saved_files[0]).stem
-    cats = [c.strip() for c in category.split(",") if c.strip()]
-    usages = [u.strip() for u in usage.split(",") if u.strip()]
-    pack = create_pack(pack_name, saved_files, cats, usages, file_type=ftype)
-    return {"pack": pack.model_dump(), "message": "上传成功，等待解析"}
+    cats = _parse_string_list(category)
+    usages = _parse_string_list(usage)
+    pack = asset_service.create_pack(
+        pack_name,
+        saved_files,
+        cats,
+        usages,
+        file_type=ftype,
+        pack_type=pack_type,
+    )
+    return pack.model_dump()
 
 
 @app.post("/api/asset-packs/{pack_id}/parse")
 async def api_parse_pack(pack_id: str):
     """Trigger PDF parsing for an asset pack."""
-    from core.services.asset_service import parse_pack, get_pack
-    pack = get_pack(pack_id)
+    pack = asset_service.get_pack(pack_id)
     if not pack:
         raise HTTPException(404, "素材包不存在")
-    import threading
-    threading.Thread(target=parse_pack, args=(pack_id,), daemon=True).start()
-    return {"pack_id": pack_id, "status": "parsing"}
+    pack = asset_service.parse_pack(pack_id)
+    return pack.model_dump()
 
 
 
 @app.get("/api/asset-packs/{pack_id}/items")
 async def api_list_pack_items(pack_id: str):
-    from core.services.asset_service import list_pack_items
-    return {"items": list_pack_items(pack_id)}
+    return asset_service.list_pack_items(pack_id)
+
+
+@app.patch("/api/asset-items/{item_id}")
+async def api_update_asset_item(item_id: str, body: dict):
+    item = asset_service.update_item(item_id, **body)
+    if not item:
+        raise HTTPException(404, "素材项不存在")
+    return item.model_dump()
+
+
+@app.post("/api/asset-items/batch-confirm")
+async def api_batch_confirm_items_post(body: dict):
+    return await api_batch_confirm_items(body)
+
+
+@app.post("/api/asset-items/batch-disable")
+async def api_batch_disable_items_post(body: dict):
+    return await api_batch_disable_items(body)
 
 
 @app.patch("/api/asset-items/batch-confirm")
 async def api_batch_confirm_items(body: dict):
-    from core.services.asset_service import batch_update_items
     ids = body.get("asset_item_ids", [])
     status = body.get("status", "confirmed")
-    updated = batch_update_items(ids, status=status)
+    tags = body.get("tags", [])
+    updated = asset_service.batch_update_items(
+        ids,
+        status=status,
+        tags=tags,
+        group=body.get("group"),
+        applicable_categories=body.get("applicable_categories"),
+        applicable_image_types=body.get("applicable_image_types"),
+    )
     return {"updated": len(updated), "items": updated}
 
 
 @app.patch("/api/asset-items/batch-disable")
 async def api_batch_disable_items(body: dict):
-    from core.services.asset_service import batch_update_items
     ids = body.get("asset_item_ids", [])
-    updated = batch_update_items(ids, status="disabled")
+    tags = body.get("tags", [])
+    updated = asset_service.batch_update_items(
+        ids,
+        status="disabled",
+        tags=tags,
+        group=body.get("group"),
+        applicable_categories=body.get("applicable_categories"),
+        applicable_image_types=body.get("applicable_image_types"),
+    )
     return {"updated": len(updated), "items": updated}
 
 
@@ -1134,8 +1350,7 @@ async def api_batch_disable_items(body: dict):
 
 @app.get("/api/knowledge-docs")
 async def api_list_docs():
-    from core.services.asset_service import list_docs
-    return {"docs": list_docs()}
+    return asset_service.list_docs()
 
 
 @app.post("/api/knowledge-docs/upload")
@@ -1145,24 +1360,25 @@ async def api_upload_doc(
     name_en: str = Form(""),
     category: str = Form("Pet Supplies,Cat Furniture"),
 ):
-    from core.services.asset_service import create_doc
-    upload_dir = Path("assets/uploads")
+    upload_dir = Path("assets/uploads/docs")
     upload_dir.mkdir(parents=True, exist_ok=True)
     fname = file.filename or "upload.pdf"
+    ext = Path(fname).suffix.lower()
+    if ext not in {".pdf", ".docx", ".txt", ".md"}:
+        raise HTTPException(400, f"不支持的知识库文档类型: {ext}")
     dest = upload_dir / f"{uuid.uuid4().hex[:8]}_{fname}"
     with open(dest, "wb") as f:
         content = await file.read()
         f.write(content)
     doc_name = name or Path(fname).stem
-    cats = [c.strip() for c in category.split(",") if c.strip()]
-    doc = create_doc(doc_name, str(dest), cats, name_en=name_en)
-    return {"doc": doc.model_dump(), "message": "上传成功，等待解析"}
+    cats = _parse_string_list(category)
+    doc = asset_service.create_doc(doc_name, str(dest), cats, name_en=name_en)
+    return doc.model_dump()
 
 
 @app.get("/api/knowledge-docs/{doc_id}")
 async def api_get_doc(doc_id: str):
-    from core.services.asset_service import get_doc
-    doc = get_doc(doc_id)
+    doc = asset_service.get_doc(doc_id)
     if not doc:
         raise HTTPException(404, "文档不存在")
     return doc.model_dump()
@@ -1170,8 +1386,7 @@ async def api_get_doc(doc_id: str):
 
 @app.get("/api/knowledge-docs/{doc_id}/summary")
 async def api_get_doc_summary(doc_id: str):
-    from core.services.asset_service import get_doc
-    doc = get_doc(doc_id)
+    doc = asset_service.get_doc(doc_id)
     if not doc:
         raise HTTPException(404, "文档不存在")
     return {"doc_id": doc_id, "summary": doc.summary, "knowledge": doc.parsed_knowledge}
@@ -1179,13 +1394,11 @@ async def api_get_doc_summary(doc_id: str):
 
 @app.post("/api/knowledge-docs/{doc_id}/analyze")
 async def api_analyze_doc(doc_id: str):
-    from core.services.asset_service import analyze_doc, get_doc
-    doc = get_doc(doc_id)
+    doc = asset_service.get_doc(doc_id)
     if not doc:
         raise HTTPException(404, "文档不存在")
-    import threading
-    threading.Thread(target=analyze_doc, args=(doc_id,), daemon=True).start()
-    return {"doc_id": doc_id, "status": "parsing"}
+    doc = asset_service.analyze_doc(doc_id)
+    return doc.model_dump()
 
 
 @app.get("/api/models")
